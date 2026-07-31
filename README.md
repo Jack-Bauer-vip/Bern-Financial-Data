@@ -52,6 +52,10 @@ start_bern.bat   # 或 python src/main.py
 | `POST /api/v1/sync/{source_key}` | 触发异步同步 |
 | `GET /docs` | Swagger 交互文档 |
 
+**鉴权**：若在 `.env` 配置了 `API_TOKEN`，除 `/health`、`/docs` 外的接口需带 `X-API-Key: <token>` 头（或 `?token=<token>` 参数）。留空则不鉴权。
+
+**数据分发**：`GET /api/v1/data/{table_name}` 通用按表查询，供其他模块调用（`/api/v1/data/tables` 列出可用表）。
+
 ## 测试
 
 ```bash

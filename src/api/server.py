@@ -32,6 +32,53 @@ class ConnectionTrackingMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class AuthMiddleware(BaseHTTPMiddleware):
+    """API token 鉴权
+
+    校验 X-API-Key 请求头或 ?token= 查询参数。
+    - 未配置 token（API_TOKEN 为空）→ 放行（兼容开发模式）
+    - 已配置 token → 请求必须带正确 token，否则 401
+    - 公开端点（/health、/docs、/openapi.json、/）豁免
+    """
+
+    # 无需鉴权的路径（前缀匹配）
+    PUBLIC_PATHS = ("/health", "/docs", "/openapi.json", "/redoc")
+
+    def __init__(self, app):
+        super().__init__(app)
+        from src.utils.config import ConfigManager
+        # 从 .env 读 token（可能为空 = 未启用鉴权）
+        self.api_token = (ConfigManager().get_env("API_TOKEN") or "").strip()
+
+    async def dispatch(self, request: Request, call_next):
+        # 未配置 token → 全部放行
+        if not self.api_token:
+            return await call_next(request)
+
+        path = request.url.path
+        # 公开端点豁免：精确匹配 / 或 以 /api/v1/ 前缀 + 公开路径结尾
+        if path == "/":
+            return await call_next(request)
+        for p in self.PUBLIC_PATHS:
+            if path == p or path == f"/api/v1{p}":
+                return await call_next(request)
+
+        # 校验 token（头优先，其次查询参数）
+        provided = request.headers.get("x-api-key", "")
+        if not provided:
+            provided = request.query_params.get("token", "")
+
+        if provided != self.api_token:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=401,
+                content={"code": 401, "message": "无效或缺失的 API token"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        return await call_next(request)
+
+
 class FastAPIServer:
     """FastAPI 服务管理器 — 后台 uvicorn 线程"""
 
@@ -59,8 +106,14 @@ class FastAPIServer:
         self._register_routes()
 
     def _setup_middleware(self) -> None:
-        """注册中间件"""
-        # CORS — 允许本地所有来源
+        """注册中间件
+
+        注意：Starlette 中后加的中间件先执行。
+        顺序：请求 → 连接追踪 → 鉴权 → 路由
+        """
+        # 鉴权（先加 → 后执行，让连接追踪先记录）
+        self.app.add_middleware(AuthMiddleware)
+        # CORS
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -68,7 +121,7 @@ class FastAPIServer:
             allow_methods=["*"],
             allow_headers=["*"],
         )
-        # 连接追踪
+        # 连接追踪（后加 → 先执行）
         self.app.add_middleware(ConnectionTrackingMiddleware)
 
     def _register_routes(self) -> None:

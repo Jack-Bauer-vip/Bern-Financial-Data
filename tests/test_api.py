@@ -4,6 +4,8 @@
 依赖: pytest、fastapi.testclient（随项目依赖安装）
 """
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -231,3 +233,56 @@ def test_sync_known_source_202(client, monkeypatch):
     assert body["status"] == "accepted"
     assert body["source_key"] == "macro.us.cpi_yoy"
     assert body["message"]
+
+
+# ---------------------------------------------------------------------------
+# token 鉴权
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def client_with_token():
+    """设置了 API_TOKEN 的 API 客户端"""
+    old = os.environ.get("API_TOKEN")
+    os.environ["API_TOKEN"] = "test-secret-123"
+    repo = DataRepository(get_engine())
+    server = FastAPIServer(repo=repo)
+    yield TestClient(server.app)
+    if old is None:
+        os.environ.pop("API_TOKEN", None)
+    else:
+        os.environ["API_TOKEN"] = old
+
+
+def test_auth_missing_token_401(client_with_token):
+    r = client_with_token.get("/api/v1/data/tables")
+    assert r.status_code == 401
+
+
+def test_auth_wrong_token_401(client_with_token):
+    r = client_with_token.get(
+        "/api/v1/data/tables", headers={"X-API-Key": "wrong"})
+    assert r.status_code == 401
+
+
+def test_auth_correct_header_200(client_with_token):
+    r = client_with_token.get(
+        "/api/v1/data/tables", headers={"X-API-Key": "test-secret-123"})
+    assert r.status_code == 200
+
+
+def test_auth_correct_query_param_200(client_with_token):
+    r = client_with_token.get("/api/v1/data/tables?token=test-secret-123")
+    assert r.status_code == 200
+
+
+def test_auth_public_paths_exempt(client_with_token):
+    """/health、/docs、/ 免鉴权"""
+    assert client_with_token.get("/api/v1/health").status_code == 200
+    assert client_with_token.get("/").status_code == 200
+    assert client_with_token.get("/docs").status_code == 200
+
+
+def test_auth_no_token_configured_allows(client):
+    """未配置 token → 全部放行（默认行为）"""
+    assert client.get("/api/v1/data/tables").status_code == 200
