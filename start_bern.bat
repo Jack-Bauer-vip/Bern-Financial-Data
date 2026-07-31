@@ -1,0 +1,1 @@
+@chcp 65001>nul && cd /d D:\F_Data_Sys && python src\main.py && pause

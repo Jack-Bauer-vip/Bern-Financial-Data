@@ -1,0 +1,44 @@
+# Bern_Financial_Data 默认配置
+app:
+  name: "Bern_Financial_Data"
+  version: "0.1.0"
+  data_dir: "data"
+  db_path: "data/berndata.db"
+
+gui:
+  window_title: "Bern_Financial_Data - 金融数据中台"
+  window_size: [1280, 800]
+  log_max_lines: 5000
+  cache_ttl_seconds: 300
+
+sync:
+  retry_max: 3
+  batch_size: 500
+  request_delay_min: 1.0
+  request_delay_max: 3.0
+  request_timeout: 30
+  history_years: 3
+
+api:
+  host: "127.0.0.1"
+  port: 8765
+  enabled: true
+
+schedules:
+  macro_us: "0 22 * * 1-5"      # 美国宏观 工作日22:00
+  macro_cn: "0 10 * * *"        # 中国宏观 每天10:00
+  macro_eu: "0 15 * * 1-5"      # 欧洲宏观 工作日15:00
+  stock: "30 18 * * 1-5"        # 股票 交易日18:30
+
+ai:
+  # 智能导入的 AI 提供方：ollama（本地）/ deepseek（API，可选）
+  provider: "ollama"
+  # 本地 ollama
+  ollama_url: "http://localhost:11434"
+  ollama_model: "deepseek-r1:14b"
+  ollama_timeout: 120        # 秒，AI 识别超时（本地大模型较慢）
+  # deepseek API（备用，需要 .env 配 DEEPSEEK_API_KEY）
+  deepseek_base_url: "https://api.deepseek.com"
+  deepseek_model: "deepseek-chat"
+  # 规则匹配置信度阈值：超过则直接用规则结果，否则调 AI
+  rule_threshold: 0.7

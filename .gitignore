@@ -1,0 +1,40 @@
+# ---- 敏感配置 ----
+# .env 含 TUSHARE_TOKEN / DEEPSEEK_API_KEY 等密钥，绝不入库
+# 需要时复制 .env.example 为 .env 并填写自己的密钥
+.env
+
+# ---- 数据文件 ----
+# SQLite 数据库（含 WAL 日志）——数据不入库
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/schedule_state.json
+data/logs/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- 测试缓存 ----
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---- IDE / 编辑器 ----
+.idea/
+.vscode/
+*.swp
+
+# ---- 操作系统 ----
+Thumbs.db
+.DS_Store
+
+# ---- 构建产物 / 导出 ----
+dist/
+build/
+*.xlsx
+*.pdf
