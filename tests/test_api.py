@@ -143,6 +143,69 @@ def test_macro_unknown_table(client):
 
 
 # ---------------------------------------------------------------------------
+# 通用数据接口（数据分发）
+# ---------------------------------------------------------------------------
+
+
+def test_data_tables_list(client):
+    """列出可查询的数据表"""
+    r = client.get("/api/v1/data/tables")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] > 0
+    assert all("table_name" in t for t in body["data"])
+
+
+def test_data_query_generic(client):
+    """通用按表查询"""
+    r = client.get("/api/v1/data/macro_usa_cpi_yoy")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] > 0
+    # 最新数据在前（日期倒序）
+    if body["data"]:
+        first = body["data"][0]
+        assert any(k in first for k in ("时间", "日期", "date"))
+
+
+def test_data_query_date_range(client):
+    """通用查询的日期区间过滤"""
+    r = client.get(
+        "/api/v1/data/macro_usa_cpi_yoy",
+        params={"start_date": "20260601", "end_date": "20261231"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    for rec in body["data"]:
+        d = _first_date(rec)
+        assert d == "" or "2026-06-01" <= d <= "2026-12-31"
+
+
+def test_data_query_fields(client):
+    """字段选择"""
+    r = client.get(
+        "/api/v1/data/index_daily",
+        params={"fields": "date,close", "limit": 5},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    if body["data"]:
+        assert set(body["data"][0].keys()) == {"date", "close"}
+
+
+def test_data_query_unknown_table_404(client):
+    """非法表名 → 404（防注入）"""
+    r = client.get("/api/v1/data/not_a_real_table_xyz")
+    assert r.status_code == 404
+
+
+def test_data_query_injection_404(client):
+    """注入尝试 → 404"""
+    r = client.get("/api/v1/data/macro_usa_cpi_yoy;DROP%20TABLE%20x")
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # /sync 校验
 # ---------------------------------------------------------------------------
 

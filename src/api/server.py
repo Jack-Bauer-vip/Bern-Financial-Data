@@ -102,6 +102,8 @@ class FastAPIServer:
                     "/api/v1/macro/{table_name}",
                     "/api/v1/macro/cpi",
                     "/api/v1/stock/daily",
+                    "/api/v1/data/tables",
+                    "/api/v1/data/{table_name}",
                     "/api/v1/sync/{source_key}",
                 ],
             }

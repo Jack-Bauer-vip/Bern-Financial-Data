@@ -351,6 +351,78 @@ async def query_stock_daily(
 
 
 # ---------------------------------------------------------------------------
+# 通用数据接口（数据分发）
+# ---------------------------------------------------------------------------
+
+
+def _valid_table_names(repo) -> list[str]:
+    """收集所有可查询的数据表名（排除 meta_ 表）"""
+    try:
+        from src.importer.matcher import collect_tables
+        return [t.table_name for t in collect_tables(repo)]
+    except Exception:
+        return []
+
+
+@router.get("/data/tables", tags=["数据分发"])
+async def list_data_tables(repo=Depends(get_repo)):
+    """列出所有可查询的数据表（供其他模块发现可用数据）"""
+    tables = _valid_table_names(repo)
+    return DataResponse(data=[{"table_name": t} for t in tables], total=len(tables))
+
+
+@router.get("/data/{table_name}", tags=["数据分发"])
+async def query_data_table(
+    table_name: str,
+    start_date: str = Query(None, pattern=r"^\d{8}$"),
+    end_date: str = Query(None, pattern=r"^\d{8}$"),
+    limit: int = Query(500, le=100000),
+    fields: str = Query(None, description="逗号分隔的字段列表"),
+    repo=Depends(get_repo),
+):
+    """通用数据表查询（数据分发）
+
+    按表名查询任意数据表，支持日期区间、字段选择、行数限制。
+    表名必须存在于候选集合（防注入）。
+    """
+    # 表名白名单校验（防注入）
+    valid = _valid_table_names(repo)
+    if table_name not in valid:
+        raise HTTPException(
+            status_code=404,
+            detail=f"数据表 {table_name} 不存在或不可查询，可用表见 /data/tables",
+        )
+
+    try:
+        df = repo.query(table_name, limit=limit)
+    except Exception:
+        raise HTTPException(status_code=500, detail=f"查询表 {table_name} 失败")
+
+    # 字段选择
+    if fields:
+        wanted = [f.strip() for f in fields.split(",") if f.strip()]
+        existing = list(df.columns)
+        keep = [f for f in wanted if f in existing]
+        if keep:
+            df = df[keep]
+
+    # 日期区间过滤
+    df = _filter_by_date_range(df, start_date, end_date)
+
+    # 按日期列倒序（最新在前）
+    if not df.empty:
+        for _col in df.columns:
+            if any(kw in _col.lower() for kw in ("date", "时间", "日期", "月份", "trade")):
+                df = df.sort_values(by=_col, ascending=False)
+                break
+
+    return DataResponse(
+        data=df.to_dict(orient="records") if not df.empty else [],
+        total=len(df),
+    )
+
+
+# ---------------------------------------------------------------------------
 # 同步控制
 # ---------------------------------------------------------------------------
 
