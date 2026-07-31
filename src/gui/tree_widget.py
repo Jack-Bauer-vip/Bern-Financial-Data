@@ -44,6 +44,10 @@ class DataTreeWidget(QTreeWidget):
     # 树构建
     # ------------------------------------------------------------------
 
+    def rebuild(self) -> None:
+        """重新从注册表构建左侧导航树（分类管理保存后调用）"""
+        self._build_tree()
+
     def _build_tree(self) -> None:
         """从注册表加载分类树并构建树控件"""
         self.clear()

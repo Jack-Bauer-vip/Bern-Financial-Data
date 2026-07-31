@@ -371,6 +371,12 @@ class MainWindow(QMainWindow):
         self.scrape_mgr_action.triggered.connect(self._show_scrape_manager)
         data_menu.addAction(self.scrape_mgr_action)
 
+        data_menu.addSeparator()
+
+        self.catalog_mgr_action = QAction("🗂 数据分类管理", self)
+        self.catalog_mgr_action.triggered.connect(self._show_catalog_editor)
+        data_menu.addAction(self.catalog_mgr_action)
+
         # ---- 视图 ----
         view_menu = menu_bar.addMenu("视图")
 
@@ -1144,6 +1150,37 @@ class MainWindow(QMainWindow):
         dialog.exec()
         # 规则可能已改，提示
         self.log_widget.write("INFO", "抓取规则已刷新，可点「抓取所有数据源」执行")
+
+    def _show_catalog_editor(self) -> None:
+        """打开数据分类管理，保存后刷新导航树与注册表"""
+        from src.gui.dialogs.catalog_editor import CatalogEditorDialog
+        dialog = CatalogEditorDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # 刷新数据源注册表 + 左侧导航树 + 定时调度
+            try:
+                self.registry.refresh()
+                self.tree_widget.registry = self.registry
+                self.tree_widget.rebuild()
+                self.log_widget.write("INFO",
+                    "数据分类已更新，导航树已刷新")
+                # 定时调度重新注册（分类可能变化）
+                self._reload_scheduler()
+            except Exception as exc:
+                self.log_widget.write("ERROR",
+                    f"刷新导航树失败: {exc}")
+
+    def _reload_scheduler(self) -> None:
+        """重新加载定时调度（分类/定时变化后）"""
+        try:
+            # 停止旧任务，重新注册
+            self.scheduler.scheduler.remove_all_jobs()
+            self.scheduler._category_jobs.clear()
+            categories = self.registry.get_categories()
+            self.scheduler.register_category_jobs(categories, self._on_schedule_trigger)
+            self._register_scraper_jobs()
+            self.log_widget.write("INFO", "定时调度已重新加载")
+        except Exception as exc:
+            self.log_widget.write("WARNING", f"重新加载定时调度失败: {exc}")
 
     # ------------------------------------------------------------------
     # 同步
