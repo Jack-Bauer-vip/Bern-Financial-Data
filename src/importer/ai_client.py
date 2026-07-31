@@ -26,6 +26,35 @@ def strip_think(text: str) -> str:
     return text[m.end():] if m else text
 
 
+def build_data_desc(df, max_rows: int = 15) -> str:
+    """把 DataFrame 转为 AI 可读的结构化文本描述
+
+    包含：行数/列数、最近 N 行数据、数值列的统计（最新/均值/极值）。
+    """
+    if df is None or df.empty:
+        return "（无数据）"
+    lines = [f"共 {len(df)} 行 × {len(df.columns)} 列"]
+    lines.append(f"最近 {min(max_rows, len(df))} 行数据:")
+    try:
+        lines.append(df.tail(max_rows).to_string(index=False, max_colwidth=16))
+    except Exception:
+        lines.append(df.tail(max_rows).to_string(index=False))
+    # 数值列统计
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    if num_cols:
+        lines.append("\n数值列统计:")
+        for col in num_cols:
+            try:
+                s = df[col]
+                lines.append(
+                    f"  {col}: 最新={s.iloc[-1]}, 均值={s.mean():.3f}, "
+                    f"最小={s.min()}, 最大={s.max()}"
+                )
+            except Exception:
+                pass
+    return "\n".join(lines)
+
+
 def extract_json(text: str) -> Optional[dict]:
     """从模型输出中提取 JSON 对象（防御式解析，失败返回 None）
 
@@ -142,11 +171,72 @@ class AiClient:
         return data
 
     # ------------------------------------------------------------------
+    # AI 智能分析
+    # ------------------------------------------------------------------
+
+    def summarize_data(
+        self,
+        table_name: str,
+        data_desc: str,
+        focus: str = "",
+    ) -> Optional[str]:
+        """对数据生成 AI 中文分析摘要
+
+        Parameters
+        ----------
+        table_name : str
+            数据源名称（用于上下文）
+        data_desc : str
+            数据的结构化描述（最新数据行、统计指标等，由调用方生成）
+        focus : str
+            分析重点（如"近3个月CPI走势"），可空
+
+        Returns:
+            分析文本（中文），失败返回 None
+        """
+        focus_part = f"\n分析重点：{focus}" if focus else ""
+        prompt = (
+            f"请对以下金融数据做专业的中文分析。\n"
+            f"数据来源表：{table_name}\n"
+            f"{focus_part}\n\n"
+            f"数据内容：\n{data_desc}\n\n"
+            f"请给出：\n"
+            f"1. 数据概况（时间范围、数据点数、关键字段）\n"
+            f"2. 主要趋势与特征（最新值 vs 前值/前期的变化方向与幅度）\n"
+            f"3. 值得关注的极值或异常点\n"
+            f"4. 简要结论或风险提示\n\n"
+            f"用简洁的中文，分段输出，不要用JSON。"
+        )
+        # 分析类用不同 system 提示，返回纯文本
+        content = self._chat(prompt, system="你是专业的金融数据分析师，擅长解读宏观和行情数据。")
+        if not content:
+            return None
+        # 剥离思维链后返回纯文本
+        return strip_think(content).strip()
+
+    # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
 
-    def _chat(self, prompt: str) -> Optional[str]:
-        """调用聊天端点，返回 assistant 文本（失败返回 None）"""
+    def _chat(self, prompt: str, system: str = "") -> Optional[str]:
+        """调用聊天端点，返回 assistant 文本（失败返回 None）
+
+        system : 自定义 system 提示（空则用默认"金融数据导入助手"）
+        """
+        if not isinstance(data, dict):
+            return None
+        return data
+
+    # ------------------------------------------------------------------
+    # 内部
+    # ------------------------------------------------------------------
+
+    def _chat(self, prompt: str, system: str = "") -> Optional[str]:
+        """调用聊天端点，返回 assistant 文本（失败返回 None）
+
+        system : 自定义 system 提示（空则用默认"金融数据导入助手"）
+        """
+        sys_content = system or "你是金融数据导入助手，根据列名和样本值判断应导入哪张数据库表。"
         try:
             if self.provider == "ollama":
                 url = self.config.get("ai.ollama_url", "http://localhost:11434")
@@ -158,8 +248,7 @@ class AiClient:
                         "stream": False,
                         "think": False,   # 抑制思维链，稳定 JSON 输出
                         "messages": [
-                            {"role": "system",
-                             "content": "你是金融数据导入助手，根据列名和样本值判断应导入哪张数据库表。"},
+                            {"role": "system", "content": sys_content},
                             {"role": "user", "content": prompt},
                         ],
                     },
@@ -181,8 +270,7 @@ class AiClient:
                 json={
                     "model": model,
                     "messages": [
-                        {"role": "system",
-                         "content": "你是金融数据导入助手，根据列名和样本值判断应导入哪张数据库表。"},
+                        {"role": "system", "content": sys_content},
                         {"role": "user", "content": prompt},
                     ],
                 },

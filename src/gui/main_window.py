@@ -397,6 +397,12 @@ class MainWindow(QMainWindow):
         self.api_conn_action.triggered.connect(self._show_api_connections)
         tool_menu.addAction(self.api_conn_action)
 
+        tool_menu.addSeparator()
+
+        self.analyze_action = QAction("🤖 AI 智能分析", self)
+        self.analyze_action.triggered.connect(self._show_ai_analyze)
+        tool_menu.addAction(self.analyze_action)
+
         # ---- 帮助 ----
         help_menu = menu_bar.addMenu("帮助")
 
@@ -1260,6 +1266,41 @@ class MainWindow(QMainWindow):
     def _show_health_check(self) -> None:
         """打开数据源健康检查对话框"""
         dialog = HealthDialog(self.repo, self.registry, self.scheduler, self)
+        dialog.exec()
+
+    def _show_ai_analyze(self) -> None:
+        """打开 AI 智能分析对话框（分析当前表格数据）"""
+        # 当前表格数据（无论来自查询还是数据库加载）
+        df = self.table_view.pandas_model.getDataFrame()
+        if df is None or df.empty:
+            QMessageBox.information(self, "提示",
+                "当前表格没有可分析的数据\n\n"
+                "请先在左侧选择数据源并查询/同步数据，再执行 AI 分析")
+            return
+
+        # 目标表名
+        table_name = self._current_source_key or "当前数据"
+        if self._current_source_key:
+            src = self.registry.get_source(self._current_source_key)
+            if src and src.get("table_name"):
+                table_name = src["table_name"]
+
+        # AI 客户端（不可用则提示）
+        from src.importer.ai_client import AiClient
+        ai_client = AiClient()
+        if not ai_client.is_available():
+            ret = QMessageBox.question(
+                self, "AI 未就绪",
+                "未检测到本地 AI 服务（ollama）。\n\n"
+                "仍要尝试分析吗？（可能需要较长时间或失败）",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+
+        from src.gui.dialogs.analyze_dialog import AnalyzeDialog
+        dialog = AnalyzeDialog(df, table_name, ai_client, self)
         dialog.exec()
 
     # ------------------------------------------------------------------
