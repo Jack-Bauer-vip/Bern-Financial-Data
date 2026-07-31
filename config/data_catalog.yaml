@@ -384,6 +384,54 @@ categories:
             params: {}
             schedule_cron: "0 8 * * 1-5"
 
+          # ============ 美国国债收益率（每日） ============
+          # 数据源：新浪财经 bond_gb_us_sina（US2YT/US10YT/US30YT）
+          # 返回结构：date/open/high/low/close/volume（收益率%，OHLCV）
+          - name: "美国2年期国债收益率"
+            source_key: "macro.us.bond_yield_2y"
+            api_source: "akshare"
+            api_function: "bond_gb_us_sina"
+            table_name: "macro_usa_bond_yield_2y"
+            has_incremental: true
+            incremental_field: "date"
+            params_template:
+              symbol:
+                type: "select"
+                label: "期限"
+                options: ["美国2年期国债"]
+                default: "美国2年期国债"
+            schedule_cron: "0 22 * * 1-5"
+
+          - name: "美国10年期国债收益率"
+            source_key: "macro.us.bond_yield_10y"
+            api_source: "akshare"
+            api_function: "bond_gb_us_sina"
+            table_name: "macro_usa_bond_yield_10y"
+            has_incremental: true
+            incremental_field: "date"
+            params_template:
+              symbol:
+                type: "select"
+                label: "期限"
+                options: ["美国10年期国债"]
+                default: "美国10年期国债"
+            schedule_cron: "0 22 * * 1-5"
+
+          - name: "美国30年期国债收益率"
+            source_key: "macro.us.bond_yield_30y"
+            api_source: "akshare"
+            api_function: "bond_gb_us_sina"
+            table_name: "macro_usa_bond_yield_30y"
+            has_incremental: true
+            incremental_field: "date"
+            params_template:
+              symbol:
+                type: "select"
+                label: "期限"
+                options: ["美国30年期国债"]
+                default: "美国30年期国债"
+            schedule_cron: "0 22 * * 1-5"
+
   - name: "股票数据"
     icon: "chart"
     schedule_enabled: false
