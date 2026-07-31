@@ -367,6 +367,10 @@ class MainWindow(QMainWindow):
         self.scrape_all_action.triggered.connect(self._on_scrape_all)
         data_menu.addAction(self.scrape_all_action)
 
+        self.scrape_mgr_action = QAction("🕸 抓取规则管理", self)
+        self.scrape_mgr_action.triggered.connect(self._show_scrape_manager)
+        data_menu.addAction(self.scrape_mgr_action)
+
         # ---- 视图 ----
         view_menu = menu_bar.addMenu("视图")
 
@@ -1130,6 +1134,16 @@ class MainWindow(QMainWindow):
 
         t = threading.Thread(target=run_scrape, daemon=True)
         t.start()
+
+    def _show_scrape_manager(self) -> None:
+        """打开抓取规则管理器"""
+        from src.scraper.engine import ScrapeEngine
+        from src.gui.dialogs.scrape_manager import ScrapeManagerDialog
+        engine = ScrapeEngine(repo=self.repo)
+        dialog = ScrapeManagerDialog(engine, self)
+        dialog.exec()
+        # 规则可能已改，提示
+        self.log_widget.write("INFO", "抓取规则已刷新，可点「抓取所有数据源」执行")
 
     # ------------------------------------------------------------------
     # 同步

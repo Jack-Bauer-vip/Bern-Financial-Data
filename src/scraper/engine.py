@@ -45,12 +45,16 @@ class ScrapeEngine:
     # 配置加载
     # ------------------------------------------------------------------
 
+    def rules_path(self):
+        """抓取规则配置文件路径"""
+        from pathlib import Path
+        return Path(self.config.root_dir) / "config" / "scrapers.yaml"
+
     def load_rules(self) -> list[dict]:
         """从 config/scrapers.yaml 加载抓取规则"""
         import yaml
-        from pathlib import Path
 
-        path = Path(self.config.root_dir) / "config" / "scrapers.yaml"
+        path = self.rules_path()
         if not path.exists():
             return []
         try:
@@ -60,6 +64,24 @@ class ScrapeEngine:
         except Exception as exc:
             logger.error("加载抓取规则失败: %s", exc)
             return []
+
+    def save_rules(self, rules: list[dict]) -> bool:
+        """把规则列表写回 config/scrapers.yaml（保留顶部注释）"""
+        import yaml
+
+        path = self.rules_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # 写回完整结构（注释在文件里保留，写入时覆盖内容）
+            payload = {"scrapers": rules}
+            with open(path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(payload, f, allow_unicode=True,
+                               sort_keys=False, indent=2)
+            logger.info("已保存 %d 条抓取规则到 %s", len(rules), path)
+            return True
+        except Exception as exc:
+            logger.error("保存抓取规则失败: %s", exc)
+            return False
 
     def get_rule(self, name: str) -> dict | None:
         """按名称查找抓取规则"""
