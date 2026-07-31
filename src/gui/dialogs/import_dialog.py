@@ -170,6 +170,9 @@ class ImportDialog(QDialog):
         self.setMinimumSize(760, 560)
         self.resize(860, 640)
 
+        # 支持拖拽文件到窗口
+        self.setAcceptDrops(True)
+
         self._setup_ui()
 
     # ------------------------------------------------------------------
@@ -180,9 +183,9 @@ class ImportDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # ---- ① 选择文件 ----
-        file_group = QGroupBox("① 选择文件（可多选）")
+        file_group = QGroupBox("① 选择文件（可多选 / 拖拽文件到窗口）")
         file_layout = QHBoxLayout(file_group)
-        self.file_label = QLabel("未选择文件")
+        self.file_label = QLabel("拖拽文件到此处，或点击浏览")
         self.file_label.setStyleSheet("color: #888;")
         self.browse_btn = QPushButton("浏览...")
         self.browse_btn.clicked.connect(self._browse)
@@ -268,7 +271,10 @@ class ImportDialog(QDialog):
             self, "选择要导入的文件（可多选）", "", filters)
         if not paths:
             return
+        self._start_identify(paths)
 
+    def _start_identify(self, paths: list[str]) -> None:
+        """对给定文件路径启动后台识别（浏览与拖拽共用）"""
         # 去重（已在列表中的跳过）
         new_paths = [p for p in paths if p not in self._items]
         if not new_paths:
@@ -299,6 +305,40 @@ class ImportDialog(QDialog):
         self._thread.started.connect(worker.run)
         self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
+
+    # ------------------------------------------------------------------
+    # 拖拽上传
+    # ------------------------------------------------------------------
+
+    def dragEnterEvent(self, event) -> None:
+        """接受拖入的文件（仅支持 csv/xlsx/xls）"""
+        if self._thread is not None:
+            return
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if any(self._is_supported(u.toLocalFile()) for u in urls):
+                event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        """拖入文件 → 追加到导入列表并启动识别"""
+        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        supported = [p for p in paths if self._is_supported(p)]
+        if not supported:
+            self.file_label.setText("不支持的文件类型，请拖入 CSV / Excel")
+            self.file_label.setStyleSheet("color: #c62828;")
+            return
+        # 过滤掉已导入/正在识别的
+        new_paths = [p for p in supported if p not in self._items]
+        if not new_paths:
+            self.file_label.setText("这些文件已在导入列表中")
+            return
+        self.file_label.setStyleSheet("color: #e0e0e0;")
+        self._start_identify(new_paths)
+
+    @staticmethod
+    def _is_supported(path: str) -> bool:
+        """判断文件扩展名是否受支持"""
+        return os.path.splitext(path)[1].lower() in IMPORTERS
 
     def _populate_rows(self) -> None:
         """刷新文件列表行"""
