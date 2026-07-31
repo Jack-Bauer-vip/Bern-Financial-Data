@@ -1,0 +1,35 @@
+# ===========================================================================
+# 数据抓取规则配置
+#
+# 每个抓取任务定义：
+#   name:         任务名称（唯一）
+#   url:          要抓取的网页地址
+#   method:       请求方法（GET/POST），默认 GET
+#   headers:      可选，自定义请求头（如 Referer）
+#   # 解析方式（二选一）：
+#   #   A. HTML 表格：table_index 指定第几个 <table>（0 起），rows 行选择器
+#   #   B. HTML 行列表：只写 rows（CSS 选择器），每行元素作为一条记录
+#   rows:         CSS 选择器，定位每一行数据元素
+#   columns:      列定义列表 [{name: 列名, index: 从行元素中第几个子元素取值, attr: 可选属性}]
+#   date_column:  可选，日期列名（用于增量判断）
+#   table_name:   入库的目标表名（不存在会自动创建）
+#   schedule:     可选 cron 表达式，配置后注册到定时调度
+#   enabled:      是否启用
+#
+# 示例：抓取某个含 HTML 表格的网页。
+# 注意：示例 URL 是占位，实际使用请替换为真实可抓取的数据源。
+# ===========================================================================
+
+scrapers:
+  - name: "示例数据表"
+    url: "https://example.com/data-table"
+    method: "GET"
+    rows: "table tr"          # 定位 <table> 里的每一行
+    columns:
+      - {name: "日期", index: 0}
+      - {name: "数值", index: 1}
+      - {name: "涨跌幅", index: 2}
+    date_column: "日期"
+    table_name: "scrape_example"
+    schedule: ""              # 留空则不注册定时
+    enabled: false

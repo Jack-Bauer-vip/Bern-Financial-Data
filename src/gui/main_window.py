@@ -361,6 +361,12 @@ class MainWindow(QMainWindow):
         self.health_check_action.triggered.connect(self._show_health_check)
         data_menu.addAction(self.health_check_action)
 
+        data_menu.addSeparator()
+
+        self.scrape_all_action = QAction("🕷 抓取所有数据源", self)
+        self.scrape_all_action.triggered.connect(self._on_scrape_all)
+        data_menu.addAction(self.scrape_all_action)
+
         # ---- 视图 ----
         view_menu = menu_bar.addMenu("视图")
 
@@ -529,6 +535,9 @@ class MainWindow(QMainWindow):
         categories = self.registry.get_categories()
         self.scheduler.register_category_jobs(categories, self._on_schedule_trigger)
 
+        # ★ 注册抓取规则的定时任务（scrapers.yaml 中带 schedule 的）
+        self._register_scraper_jobs()
+
         # ★ 从持久化文件恢复定时开关状态
         self._restore_schedule_state()
 
@@ -542,6 +551,42 @@ class MainWindow(QMainWindow):
 
         # ★ 自动启动 API 服务
         self._start_api_server()
+
+    def _register_scraper_jobs(self) -> None:
+        """注册抓取规则的定时任务（scrapers.yaml 中带 schedule 的）"""
+        try:
+            from src.scraper.engine import ScrapeEngine
+            engine = ScrapeEngine(repo=self.repo)
+            rules = engine.load_rules()
+            count = 0
+            for rule in rules:
+                cron = rule.get("schedule", "").strip()
+                name = rule.get("name", "")
+                if not cron or rule.get("enabled") is False:
+                    continue
+                # 注册到调度器（回调在 APScheduler 线程中执行）
+                job_id = self.scheduler.add_job(
+                    f"scrape_{name}", cron, f"抓取[{name}]",
+                    self._make_scrape_callback(engine, name))
+                if job_id:
+                    count += 1
+            if count:
+                logger.info(f"已注册 {count} 个抓取定时任务")
+        except Exception as exc:
+            logger.warning(f"注册抓取定时任务失败: {exc}")
+
+    @staticmethod
+    def _make_scrape_callback(engine, name: str):
+        """构造抓取定时回调（返回可调用对象）"""
+        from src.utils.logger import logger as _logger
+
+        def _cb(*args, **kwargs):
+            try:
+                added = engine.run_by_name(name)
+                _logger.info("定时抓取 [%s] 完成: %d 行", name, added)
+            except Exception as exc:
+                _logger.error("定时抓取 [%s] 失败: %s", name, exc)
+        return _cb
 
     def _on_schedule_trigger(self, source_key: str, category_name: str) -> None:
         """定时任务触发回调（在 APScheduler 线程中运行）
@@ -1039,6 +1084,52 @@ class MainWindow(QMainWindow):
             "INFO",
             f"查询完成 [{source_key}] 共 {len(df)} 条记录",
         )
+
+    # ------------------------------------------------------------------
+    # 数据抓取
+    # ------------------------------------------------------------------
+
+    def _on_scrape_all(self) -> None:
+        """抓取所有启用的抓取规则（后台线程，避免卡 UI）"""
+        from src.scraper.engine import ScrapeEngine
+        engine = ScrapeEngine(repo=self.repo)
+        rules = engine.load_rules()
+        enabled = [r for r in rules if r.get("enabled") is not False]
+        if not enabled:
+            self.log_widget.write("WARNING",
+                "没有启用的抓取规则，请检查 config/scrapers.yaml")
+            return
+
+        names = "\n".join(f"  • {r.get('name')}" for r in enabled)
+        ret = QMessageBox.question(
+            self, "确认抓取",
+            f"将抓取以下 {len(enabled)} 个数据源：\n\n{names}\n\n是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+
+        self.log_widget.write("INFO", f"开始抓取 {len(enabled)} 个数据源...")
+
+        import threading
+        def run_scrape():
+            try:
+                results = engine.run_all_enabled()
+                def report():
+                    ok = sum(1 for v in results.values() if v >= 0)
+                    self.log_widget.write(
+                        "SUCCESS",
+                        f"抓取完成: {ok}/{len(results)} 成功  |  "
+                        + "  ".join(f"{k}={v}行" for k, v in results.items()))
+                    self._refresh_current_table()
+                self._result_queue.put(report)
+            except Exception as exc:
+                self._result_queue.put(
+                    lambda: self.log_widget.write("ERROR", f"抓取失败: {exc}"))
+
+        t = threading.Thread(target=run_scrape, daemon=True)
+        t.start()
 
     # ------------------------------------------------------------------
     # 同步

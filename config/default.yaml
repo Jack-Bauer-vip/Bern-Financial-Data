@@ -42,3 +42,7 @@ ai:
   deepseek_model: "deepseek-chat"
   # 规则匹配置信度阈值：超过则直接用规则结果，否则调 AI
   rule_threshold: 0.7
+
+scraper:
+  # 数据抓取超时（秒）
+  timeout: 30
