@@ -1,520 +1,474 @@
 # Bern_Financial_Data 数据分类树和接口映射
 # 此文件驱动左侧导航树和数据流水线
-
 categories:
-  - name: "全球宏观数据"
-    icon: "globe"
-    schedule_enabled: true
+- name: 全球宏观数据
+  icon: globe
+  schedule_enabled: true
+  children:
+  - name: 🇺🇸 美国经济
+    source_key: macro.us
     children:
-      - name: "🇺🇸 美国经济"
-        source_key: "macro.us"
-        children:
-          - name: "美国CPI年率"
-            source_key: "macro.us.cpi_yoy"
-            api_source: "akshare"
-            api_function: "macro_usa_cpi_yoy"
-            table_name: "macro_usa_cpi_yoy"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国核心CPI月率"
-            source_key: "macro.us.core_cpi_monthly"
-            api_source: "akshare"
-            api_function: "macro_usa_core_cpi_monthly"
-            table_name: "macro_usa_core_cpi_monthly"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国GDP"
-            source_key: "macro.us.gdp_monthly"
-            api_source: "akshare"
-            api_function: "macro_usa_gdp_monthly"
-            table_name: "macro_usa_gdp_monthly"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国非农就业"
-            source_key: "macro.us.non_farm"
-            api_source: "akshare"
-            api_function: "macro_usa_non_farm"
-            table_name: "macro_usa_non_farm"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国失业率"
-            source_key: "macro.us.unemployment_rate"
-            api_source: "akshare"
-            api_function: "macro_usa_unemployment_rate"
-            table_name: "macro_usa_unemployment_rate"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国ISM制造业PMI"
-            source_key: "macro.us.ism_pmi"
-            api_source: "akshare"
-            api_function: "macro_usa_ism_pmi"
-            table_name: "macro_usa_ism_pmi"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国ISM非制造业PMI"
-            source_key: "macro.us.ism_non_pmi"
-            api_source: "akshare"
-            api_function: "macro_usa_ism_non_pmi"
-            table_name: "macro_usa_ism_non_pmi"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国零售销售"
-            source_key: "macro.us.retail_sales"
-            api_source: "akshare"
-            api_function: "macro_usa_retail_sales"
-            table_name: "macro_usa_retail_sales"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国初请失业金"
-            source_key: "macro.us.initial_jobless"
-            api_source: "akshare"
-            api_function: "macro_usa_initial_jobless"
-            table_name: "macro_usa_initial_jobless"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国消费者信心"
-            source_key: "macro.us.cb_consumer_confidence"
-            api_source: "akshare"
-            api_function: "macro_usa_cb_consumer_confidence"
-            table_name: "macro_usa_cb_consumer_confidence"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国PPI"
-            source_key: "macro.us.ppi"
-            api_source: "akshare"
-            api_function: "macro_usa_ppi"
-            table_name: "macro_usa_ppi"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国核心PCE"
-            source_key: "macro.us.core_pce_price"
-            api_source: "akshare"
-            api_function: "macro_usa_core_pce_price"
-            table_name: "macro_usa_core_pce_price"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国工厂订单"
-            source_key: "macro.us.factory_orders"
-            api_source: "akshare"
-            api_function: "macro_usa_factory_orders"
-            table_name: "macro_usa_factory_orders"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国耐用品订单"
-            source_key: "macro.us.durable_goods_orders"
-            api_source: "akshare"
-            api_function: "macro_usa_durable_goods_orders"
-            table_name: "macro_usa_durable_goods_orders"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国贸易帐"
-            source_key: "macro.us.trade_balance"
-            api_source: "akshare"
-            api_function: "macro_usa_trade_balance"
-            table_name: "macro_usa_trade_balance"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国工业产出"
-            source_key: "macro.us.industrial_production"
-            api_source: "akshare"
-            api_function: "macro_usa_industrial_production"
-            table_name: "macro_usa_industrial_production"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国新屋开工"
-            source_key: "macro.us.house_starts"
-            api_source: "akshare"
-            api_function: "macro_usa_house_starts"
-            table_name: "macro_usa_house_starts"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国成屋销售"
-            source_key: "macro.us.exist_home_sales"
-            api_source: "akshare"
-            api_function: "macro_usa_exist_home_sales"
-            table_name: "macro_usa_exist_home_sales"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国个人支出"
-            source_key: "macro.us.personal_spending"
-            api_source: "akshare"
-            api_function: "macro_usa_personal_spending"
-            table_name: "macro_usa_personal_spending"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国密歇根消费者信心"
-            source_key: "macro.us.michigan_consumer_sentiment"
-            api_source: "akshare"
-            api_function: "macro_usa_michigan_consumer_sentiment"
-            table_name: "macro_usa_michigan_consumer_sentiment"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国NFIB小企业信心"
-            source_key: "macro.us.nfib_small_business"
-            api_source: "akshare"
-            api_function: "macro_usa_nfib_small_business"
-            table_name: "macro_usa_nfib_small_business"
-            params: {}
-            schedule_cron: "0 22 * * 1-5"
-
-      - name: "🇪🇺 欧元区经济"
-        source_key: "macro.eu"
-        children:
-          - name: "欧元区CPI"
-            source_key: "macro.eu.cpi_yoy"
-            api_source: "akshare"
-            api_function: "macro_euro_cpi_yoy"
-            table_name: "macro_euro_cpi_yoy"
-            params: {}
-            schedule_cron: "0 15 * * 1-5"
-
-          - name: "欧元区GDP"
-            source_key: "macro.eu.gdp_yoy"
-            api_source: "akshare"
-            api_function: "macro_euro_gdp_yoy"
-            table_name: "macro_euro_gdp_yoy"
-            params: {}
-            schedule_cron: "0 15 * * 1-5"
-
-          - name: "欧元区制造业PMI"
-            source_key: "macro.eu.manufacturing_pmi"
-            api_source: "akshare"
-            api_function: "macro_euro_manufacturing_pmi"
-            table_name: "macro_euro_manufacturing_pmi"
-            params: {}
-            schedule_cron: "0 15 * * 1-5"
-
-          - name: "欧元区服务业PMI"
-            source_key: "macro.eu.services_pmi"
-            api_source: "akshare"
-            api_function: "macro_euro_services_pmi"
-            table_name: "macro_euro_services_pmi"
-            params: {}
-            schedule_cron: "0 15 * * 1-5"
-
-          - name: "欧元区失业率"
-            source_key: "macro.eu.unemployment_rate"
-            api_source: "akshare"
-            api_function: "macro_euro_unemployment_rate_mom"
-            table_name: "macro_euro_unemployment_rate_mom"
-            params: {}
-            schedule_cron: "0 15 * * 1-5"
-
-          - name: "欧元区零售销售"
-            source_key: "macro.eu.retail_sales"
-            api_source: "akshare"
-            api_function: "macro_euro_retail_sales_mom"
-            table_name: "macro_euro_retail_sales_mom"
-            params: {}
-            schedule_cron: "0 15 * * 1-5"
-
-          - name: "欧元区贸易帐"
-            source_key: "macro.eu.trade_balance"
-            api_source: "akshare"
-            api_function: "macro_euro_trade_balance"
-            table_name: "macro_euro_trade_balance"
-            params: {}
-            schedule_cron: "0 15 * * 1-5"
-
-          - name: "欧元区Sentix投资者信心"
-            source_key: "macro.eu.sentix_confidence"
-            api_source: "akshare"
-            api_function: "macro_euro_sentix_investor_confidence"
-            table_name: "macro_euro_sentix_investor_confidence"
-            params: {}
-            schedule_cron: "0 15 * * 1-5"
-
-      - name: "🇯🇵 日本经济"
-        source_key: "macro.jp"
-        children:
-          - name: "日本CPI年率"
-            source_key: "macro.jp.cpi_yearly"
-            api_source: "akshare"
-            api_function: "macro_japan_cpi_yearly"
-            table_name: "macro_japan_cpi_yearly"
-            params: {}
-            schedule_cron: "0 8 * * 1-5"
-
-          - name: "日本核心CPI年率"
-            source_key: "macro.jp.core_cpi_yearly"
-            api_source: "akshare"
-            api_function: "macro_japan_core_cpi_yearly"
-            table_name: "macro_japan_core_cpi_yearly"
-            params: {}
-            schedule_cron: "0 8 * * 1-5"
-
-          - name: "日本失业率"
-            source_key: "macro.jp.unemployment_rate"
-            api_source: "akshare"
-            api_function: "macro_japan_unemployment_rate"
-            table_name: "macro_japan_unemployment_rate"
-            params: {}
-            schedule_cron: "0 8 * * 1-5"
-
-          - name: "日本央行利率"
-            source_key: "macro.jp.bank_rate"
-            api_source: "akshare"
-            api_function: "macro_japan_bank_rate"
-            table_name: "macro_japan_bank_rate"
-            params: {}
-            schedule_cron: "0 8 * * 1-5"
-
-      - name: "🇬🇧 英国经济"
-        source_key: "macro.uk"
-        children:
-          - name: "英国CPI年率"
-            source_key: "macro.uk.cpi_yearly"
-            api_source: "akshare"
-            api_function: "macro_uk_cpi_yearly"
-            table_name: "macro_uk_cpi_yearly"
-            params: {}
-            schedule_cron: "0 14 * * 1-5"
-
-          - name: "英国GDP"
-            source_key: "macro.uk.gdp_yearly"
-            api_source: "akshare"
-            api_function: "macro_uk_gdp_yearly"
-            table_name: "macro_uk_gdp_yearly"
-            params: {}
-            schedule_cron: "0 14 * * 1-5"
-
-          - name: "英国失业率"
-            source_key: "macro.uk.unemployment_rate"
-            api_source: "akshare"
-            api_function: "macro_uk_unemployment_rate"
-            table_name: "macro_uk_unemployment_rate"
-            params: {}
-            schedule_cron: "0 14 * * 1-5"
-
-          - name: "英国央行利率"
-            source_key: "macro.uk.bank_rate"
-            api_source: "akshare"
-            api_function: "macro_uk_bank_rate"
-            table_name: "macro_uk_bank_rate"
-            params: {}
-            schedule_cron: "0 14 * * 1-5"
-
-      - name: "🇨🇳 中国经济"
-        source_key: "macro.cn"
-        children:
-          - name: "中国CPI年率"
-            source_key: "macro.cn.cpi_yearly"
-            api_source: "akshare"
-            api_function: "macro_china_cpi_yearly"
-            table_name: "macro_china_cpi_yearly"
-            params: {}
-            schedule_cron: "0 10 * * *"
-
-          - name: "中国CPI月率"
-            source_key: "macro.cn.cpi_monthly"
-            api_source: "akshare"
-            api_function: "macro_china_cpi_monthly"
-            table_name: "macro_china_cpi_monthly"
-            params: {}
-            schedule_cron: "0 10 * * *"
-
-          - name: "中国GDP年率"
-            source_key: "macro.cn.gdp_yearly"
-            api_source: "akshare"
-            api_function: "macro_china_gdp_yearly"
-            table_name: "macro_china_gdp_yearly"
-            params: {}
-            schedule_cron: "0 10 * * *"
-
-          - name: "中国PMI"
-            source_key: "macro.cn.pmi"
-            api_source: "akshare"
-            api_function: "macro_china_pmi"
-            table_name: "macro_china_pmi"
-            params: {}
-            schedule_cron: "0 10 * * *"
-
-          - name: "中国货币供应量M2"
-            source_key: "macro.cn.money_supply"
-            api_source: "akshare"
-            api_function: "macro_china_money_supply"
-            table_name: "macro_china_money_supply"
-            params: {}
-            schedule_cron: "0 10 * * *"
-
-          - name: "中国LPR利率"
-            source_key: "macro.cn.lpr"
-            api_source: "akshare"
-            api_function: "macro_china_lpr"
-            table_name: "macro_china_lpr"
-            params: {}
-            schedule_cron: "0 10 * * *"
-
-          - name: "SHIBOR利率"
-            source_key: "macro.cn.shibor"
-            api_source: "akshare"
-            api_function: "macro_china_shibor_all"
-            table_name: "macro_china_shibor_all"
-            params: {}
-            schedule_cron: "0 10 * * *"
-
-      - name: "🇦🇺 澳洲经济"
-        source_key: "macro.au"
-        children:
-          - name: "澳大利亚CPI年率"
-            source_key: "macro.au.cpi_yearly"
-            api_source: "akshare"
-            api_function: "macro_australia_cpi_yearly"
-            table_name: "macro_australia_cpi_yearly"
-            params: {}
-            schedule_cron: "0 8 * * 1-5"
-
-          # ============ 美国国债收益率（每日） ============
-          # 数据源：新浪财经 bond_gb_us_sina（US2YT/US10YT/US30YT）
-          # 返回结构：date/open/high/low/close/volume（收益率%，OHLCV）
-          - name: "美国2年期国债收益率"
-            source_key: "macro.us.bond_yield_2y"
-            api_source: "akshare"
-            api_function: "bond_gb_us_sina"
-            table_name: "macro_usa_bond_yield_2y"
-            has_incremental: true
-            incremental_field: "date"
-            params_template:
-              symbol:
-                type: "select"
-                label: "期限"
-                options: ["美国2年期国债"]
-                default: "美国2年期国债"
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国10年期国债收益率"
-            source_key: "macro.us.bond_yield_10y"
-            api_source: "akshare"
-            api_function: "bond_gb_us_sina"
-            table_name: "macro_usa_bond_yield_10y"
-            has_incremental: true
-            incremental_field: "date"
-            params_template:
-              symbol:
-                type: "select"
-                label: "期限"
-                options: ["美国10年期国债"]
-                default: "美国10年期国债"
-            schedule_cron: "0 22 * * 1-5"
-
-          - name: "美国30年期国债收益率"
-            source_key: "macro.us.bond_yield_30y"
-            api_source: "akshare"
-            api_function: "bond_gb_us_sina"
-            table_name: "macro_usa_bond_yield_30y"
-            has_incremental: true
-            incremental_field: "date"
-            params_template:
-              symbol:
-                type: "select"
-                label: "期限"
-                options: ["美国30年期国债"]
-                default: "美国30年期国债"
-            schedule_cron: "0 22 * * 1-5"
-
-  - name: "股票数据"
-    icon: "chart"
-    schedule_enabled: false
+    - name: 美国CPI年率
+      source_key: macro.us.cpi_yoy
+      api_source: akshare
+      api_function: macro_usa_cpi_yoy
+      table_name: macro_usa_cpi_yoy
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国核心CPI月率
+      source_key: macro.us.core_cpi_monthly
+      api_source: akshare
+      api_function: macro_usa_core_cpi_monthly
+      table_name: macro_usa_core_cpi_monthly
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国GDP
+      source_key: macro.us.gdp_monthly
+      api_source: akshare
+      api_function: macro_usa_gdp_monthly
+      table_name: macro_usa_gdp_monthly
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国非农就业
+      source_key: macro.us.non_farm
+      api_source: akshare
+      api_function: macro_usa_non_farm
+      table_name: macro_usa_non_farm
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国失业率
+      source_key: macro.us.unemployment_rate
+      api_source: akshare
+      api_function: macro_usa_unemployment_rate
+      table_name: macro_usa_unemployment_rate
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国ISM制造业PMI
+      source_key: macro.us.ism_pmi
+      api_source: akshare
+      api_function: macro_usa_ism_pmi
+      table_name: macro_usa_ism_pmi
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国ISM非制造业PMI
+      source_key: macro.us.ism_non_pmi
+      api_source: akshare
+      api_function: macro_usa_ism_non_pmi
+      table_name: macro_usa_ism_non_pmi
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国零售销售
+      source_key: macro.us.retail_sales
+      api_source: akshare
+      api_function: macro_usa_retail_sales
+      table_name: macro_usa_retail_sales
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国初请失业金
+      source_key: macro.us.initial_jobless
+      api_source: akshare
+      api_function: macro_usa_initial_jobless
+      table_name: macro_usa_initial_jobless
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国消费者信心
+      source_key: macro.us.cb_consumer_confidence
+      api_source: akshare
+      api_function: macro_usa_cb_consumer_confidence
+      table_name: macro_usa_cb_consumer_confidence
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国PPI
+      source_key: macro.us.ppi
+      api_source: akshare
+      api_function: macro_usa_ppi
+      table_name: macro_usa_ppi
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国核心PCE
+      source_key: macro.us.core_pce_price
+      api_source: akshare
+      api_function: macro_usa_core_pce_price
+      table_name: macro_usa_core_pce_price
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国工厂订单
+      source_key: macro.us.factory_orders
+      api_source: akshare
+      api_function: macro_usa_factory_orders
+      table_name: macro_usa_factory_orders
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国耐用品订单
+      source_key: macro.us.durable_goods_orders
+      api_source: akshare
+      api_function: macro_usa_durable_goods_orders
+      table_name: macro_usa_durable_goods_orders
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国贸易帐
+      source_key: macro.us.trade_balance
+      api_source: akshare
+      api_function: macro_usa_trade_balance
+      table_name: macro_usa_trade_balance
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国工业产出
+      source_key: macro.us.industrial_production
+      api_source: akshare
+      api_function: macro_usa_industrial_production
+      table_name: macro_usa_industrial_production
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国新屋开工
+      source_key: macro.us.house_starts
+      api_source: akshare
+      api_function: macro_usa_house_starts
+      table_name: macro_usa_house_starts
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国成屋销售
+      source_key: macro.us.exist_home_sales
+      api_source: akshare
+      api_function: macro_usa_exist_home_sales
+      table_name: macro_usa_exist_home_sales
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国个人支出
+      source_key: macro.us.personal_spending
+      api_source: akshare
+      api_function: macro_usa_personal_spending
+      table_name: macro_usa_personal_spending
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国密歇根消费者信心
+      source_key: macro.us.michigan_consumer_sentiment
+      api_source: akshare
+      api_function: macro_usa_michigan_consumer_sentiment
+      table_name: macro_usa_michigan_consumer_sentiment
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国NFIB小企业信心
+      source_key: macro.us.nfib_small_business
+      api_source: akshare
+      api_function: macro_usa_nfib_small_business
+      table_name: macro_usa_nfib_small_business
+      params: {}
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国30年期国债收益率
+      source_key: macro.us.bond_yield_30y
+      api_source: akshare
+      api_function: bond_gb_us_sina
+      table_name: macro_usa_bond_yield_30y
+      has_incremental: true
+      incremental_field: date
+      params_template:
+        symbol:
+          type: select
+          label: 期限
+          options:
+          - 美国30年期国债
+          default: 美国30年期国债
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国2年期国债收益率
+      source_key: macro.us.bond_yield_2y
+      api_source: akshare
+      api_function: bond_gb_us_sina
+      table_name: macro_usa_bond_yield_2y
+      has_incremental: true
+      incremental_field: date
+      params_template:
+        symbol:
+          type: select
+          label: 期限
+          options:
+          - 美国2年期国债
+          default: 美国2年期国债
+      schedule_cron: 0 22 * * 1-5
+    - name: 美国10年期国债收益率
+      source_key: macro.us.bond_yield_10y
+      api_source: akshare
+      api_function: bond_gb_us_sina
+      table_name: macro_usa_bond_yield_10y
+      has_incremental: true
+      incremental_field: date
+      params_template:
+        symbol:
+          type: select
+          label: 期限
+          options:
+          - 美国10年期国债
+          default: 美国10年期国债
+      schedule_cron: 0 22 * * 1-5
+  - name: 🇪🇺 欧元区经济
+    source_key: macro.eu
     children:
-      - name: "A股日线行情"
-        source_key: "stock.a_daily"
-        api_source: "akshare"
-        api_function: "stock_zh_a_hist"
-        table_name: "stock_daily"
-        has_incremental: true
-        incremental_field: "date"
-        params_template:
-          symbol:
-            type: "text"
-            label: "股票代码"
-            default: "000001"
-          period:
-            type: "select"
-            label: "周期"
-            options: ["daily", "weekly", "monthly"]
-            default: "daily"
-          start_date:
-            type: "date"
-            label: "开始日期"
-            default_years: -3
-          end_date:
-            type: "date"
-            label: "结束日期"
-            default: "today"
-          adjust:
-            type: "select"
-            label: "复权"
-            options: ["", "qfq", "hfq"]
-            default: ""
-
-  - name: "指数数据"
-    icon: "trending_up"
-    schedule_enabled: false
+    - name: 欧元区CPI
+      source_key: macro.eu.cpi_yoy
+      api_source: akshare
+      api_function: macro_euro_cpi_yoy
+      table_name: macro_euro_cpi_yoy
+      params: {}
+      schedule_cron: 0 15 * * 1-5
+    - name: 欧元区GDP
+      source_key: macro.eu.gdp_yoy
+      api_source: akshare
+      api_function: macro_euro_gdp_yoy
+      table_name: macro_euro_gdp_yoy
+      params: {}
+      schedule_cron: 0 15 * * 1-5
+    - name: 欧元区制造业PMI
+      source_key: macro.eu.manufacturing_pmi
+      api_source: akshare
+      api_function: macro_euro_manufacturing_pmi
+      table_name: macro_euro_manufacturing_pmi
+      params: {}
+      schedule_cron: 0 15 * * 1-5
+    - name: 欧元区服务业PMI
+      source_key: macro.eu.services_pmi
+      api_source: akshare
+      api_function: macro_euro_services_pmi
+      table_name: macro_euro_services_pmi
+      params: {}
+      schedule_cron: 0 15 * * 1-5
+    - name: 欧元区失业率
+      source_key: macro.eu.unemployment_rate
+      api_source: akshare
+      api_function: macro_euro_unemployment_rate_mom
+      table_name: macro_euro_unemployment_rate_mom
+      params: {}
+      schedule_cron: 0 15 * * 1-5
+    - name: 欧元区零售销售
+      source_key: macro.eu.retail_sales
+      api_source: akshare
+      api_function: macro_euro_retail_sales_mom
+      table_name: macro_euro_retail_sales_mom
+      params: {}
+      schedule_cron: 0 15 * * 1-5
+    - name: 欧元区贸易帐
+      source_key: macro.eu.trade_balance
+      api_source: akshare
+      api_function: macro_euro_trade_balance
+      table_name: macro_euro_trade_balance
+      params: {}
+      schedule_cron: 0 15 * * 1-5
+    - name: 欧元区Sentix投资者信心
+      source_key: macro.eu.sentix_confidence
+      api_source: akshare
+      api_function: macro_euro_sentix_investor_confidence
+      table_name: macro_euro_sentix_investor_confidence
+      params: {}
+      schedule_cron: 0 15 * * 1-5
+  - name: 🇯🇵 日本经济
+    source_key: macro.jp
     children:
-      - name: "指数日线"
-        source_key: "index.daily"
-        api_source: "akshare"
-        api_function: "stock_zh_index_daily"
-        table_name: "index_daily"
-        has_incremental: true
-        incremental_field: "date"
-        params_template:
-          symbol:
-            type: "text"
-            label: "指数代码"
-            default: "sh000001"
-          start_date:
-            type: "date"
-            label: "开始日期"
-            default_years: -1
-          end_date:
-            type: "date"
-            label: "结束日期"
-            default: "today"
-
-  - name: "基金数据"
-    icon: "account_balance"
-    schedule_enabled: false
+    - name: 日本CPI年率
+      source_key: macro.jp.cpi_yearly
+      api_source: akshare
+      api_function: macro_japan_cpi_yearly
+      table_name: macro_japan_cpi_yearly
+      params: {}
+      schedule_cron: 0 8 * * 1-5
+    - name: 日本核心CPI年率
+      source_key: macro.jp.core_cpi_yearly
+      api_source: akshare
+      api_function: macro_japan_core_cpi_yearly
+      table_name: macro_japan_core_cpi_yearly
+      params: {}
+      schedule_cron: 0 8 * * 1-5
+    - name: 日本失业率
+      source_key: macro.jp.unemployment_rate
+      api_source: akshare
+      api_function: macro_japan_unemployment_rate
+      table_name: macro_japan_unemployment_rate
+      params: {}
+      schedule_cron: 0 8 * * 1-5
+    - name: 日本央行利率
+      source_key: macro.jp.bank_rate
+      api_source: akshare
+      api_function: macro_japan_bank_rate
+      table_name: macro_japan_bank_rate
+      params: {}
+      schedule_cron: 0 8 * * 1-5
+  - name: 🇬🇧 英国经济
+    source_key: macro.uk
     children:
-      - name: "ETF基金日线"
-        source_key: "fund.etf_daily"
-        api_source: "akshare"
-        api_function: "fund_etf_hist_em"
-        table_name: "fund_etf_daily"
-        has_incremental: true
-        incremental_field: "date"
-        # 需要精确代码（默认 510050 上证50ETF），缺代码时查询/同步会被拦截
-        params_template:
-          code:
-            type: "text"
-            label: "基金代码"
-            default: "510050"
-            placeholder: "请输入基金代码，如 510050"
-          start_date:
-            type: "date"
-            label: "开始日期"
-            default_years: -1
-          end_date:
-            type: "date"
-            label: "结束日期"
-            default: "today"
+    - name: 英国CPI年率
+      source_key: macro.uk.cpi_yearly
+      api_source: akshare
+      api_function: macro_uk_cpi_yearly
+      table_name: macro_uk_cpi_yearly
+      params: {}
+      schedule_cron: 0 14 * * 1-5
+    - name: 英国GDP
+      source_key: macro.uk.gdp_yearly
+      api_source: akshare
+      api_function: macro_uk_gdp_yearly
+      table_name: macro_uk_gdp_yearly
+      params: {}
+      schedule_cron: 0 14 * * 1-5
+    - name: 英国失业率
+      source_key: macro.uk.unemployment_rate
+      api_source: akshare
+      api_function: macro_uk_unemployment_rate
+      table_name: macro_uk_unemployment_rate
+      params: {}
+      schedule_cron: 0 14 * * 1-5
+    - name: 英国央行利率
+      source_key: macro.uk.bank_rate
+      api_source: akshare
+      api_function: macro_uk_bank_rate
+      table_name: macro_uk_bank_rate
+      params: {}
+      schedule_cron: 0 14 * * 1-5
+  - name: 🇨🇳 中国经济
+    source_key: macro.cn
+    children:
+    - name: 中国CPI年率
+      source_key: macro.cn.cpi_yearly
+      api_source: akshare
+      api_function: macro_china_cpi_yearly
+      table_name: macro_china_cpi_yearly
+      params: {}
+      schedule_cron: 0 10 * * *
+    - name: 中国CPI月率
+      source_key: macro.cn.cpi_monthly
+      api_source: akshare
+      api_function: macro_china_cpi_monthly
+      table_name: macro_china_cpi_monthly
+      params: {}
+      schedule_cron: 0 10 * * *
+    - name: 中国GDP年率
+      source_key: macro.cn.gdp_yearly
+      api_source: akshare
+      api_function: macro_china_gdp_yearly
+      table_name: macro_china_gdp_yearly
+      params: {}
+      schedule_cron: 0 10 * * *
+    - name: 中国PMI
+      source_key: macro.cn.pmi
+      api_source: akshare
+      api_function: macro_china_pmi
+      table_name: macro_china_pmi
+      params: {}
+      schedule_cron: 0 10 * * *
+    - name: 中国货币供应量M2
+      source_key: macro.cn.money_supply
+      api_source: akshare
+      api_function: macro_china_money_supply
+      table_name: macro_china_money_supply
+      params: {}
+      schedule_cron: 0 10 * * *
+    - name: 中国LPR利率
+      source_key: macro.cn.lpr
+      api_source: akshare
+      api_function: macro_china_lpr
+      table_name: macro_china_lpr
+      params: {}
+      schedule_cron: 0 10 * * *
+    - name: SHIBOR利率
+      source_key: macro.cn.shibor
+      api_source: akshare
+      api_function: macro_china_shibor_all
+      table_name: macro_china_shibor_all
+      params: {}
+      schedule_cron: 0 10 * * *
+  - name: 🇦🇺 澳洲经济
+    source_key: macro.au
+    children:
+    - name: 澳大利亚CPI年率
+      source_key: macro.au.cpi_yearly
+      api_source: akshare
+      api_function: macro_australia_cpi_yearly
+      table_name: macro_australia_cpi_yearly
+      params: {}
+      schedule_cron: 0 8 * * 1-5
+- name: 股票数据
+  icon: chart
+  schedule_enabled: false
+  children:
+  - name: A股日线行情
+    source_key: stock.a_daily
+    api_source: akshare
+    api_function: stock_zh_a_hist
+    table_name: stock_daily
+    has_incremental: true
+    incremental_field: date
+    params_template:
+      symbol:
+        type: text
+        label: 股票代码
+        default: '000001'
+      period:
+        type: select
+        label: 周期
+        options:
+        - daily
+        - weekly
+        - monthly
+        default: daily
+      start_date:
+        type: date
+        label: 开始日期
+        default_years: -3
+      end_date:
+        type: date
+        label: 结束日期
+        default: today
+      adjust:
+        type: select
+        label: 复权
+        options:
+        - ''
+        - qfq
+        - hfq
+        default: ''
+- name: 指数数据
+  icon: trending_up
+  schedule_enabled: false
+  children:
+  - name: 指数日线
+    source_key: index.daily
+    api_source: akshare
+    api_function: stock_zh_index_daily
+    table_name: index_daily
+    has_incremental: true
+    incremental_field: date
+    params_template:
+      symbol:
+        type: text
+        label: 指数代码
+        default: sh000001
+      start_date:
+        type: date
+        label: 开始日期
+        default_years: -1
+      end_date:
+        type: date
+        label: 结束日期
+        default: today
+- name: 基金数据
+  icon: account_balance
+  schedule_enabled: false
+  children:
+  - name: ETF基金日线
+    source_key: fund.etf_daily
+    api_source: akshare
+    api_function: fund_etf_hist_em
+    table_name: fund_etf_daily
+    has_incremental: true
+    incremental_field: date
+    params_template:
+      code:
+        type: text
+        label: 基金代码
+        default: '510050'
+        placeholder: 请输入基金代码，如 510050
+      start_date:
+        type: date
+        label: 开始日期
+        default_years: -1
+      end_date:
+        type: date
+        label: 结束日期
+        default: today

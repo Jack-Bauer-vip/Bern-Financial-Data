@@ -38,3 +38,7 @@ dist/
 build/
 *.xlsx
 *.pdf
+
+# ---- 配置备份 ----
+# catalog_io.save_catalog() 自动生成的 .bak 备份，不入库
+*.bak
