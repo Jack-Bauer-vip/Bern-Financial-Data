@@ -1,6 +1,7 @@
 """增量同步引擎 — 核心数据流水线"""
 
 import random
+import threading
 import time
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -14,6 +15,33 @@ from src.core.exceptions import BernError, DataFetchError
 from src.db.repository import DataRepository
 from src.utils.config import ConfigManager
 from src.utils.logger import logger
+
+
+# ---------------------------------------------------------------------------
+# 每数据源互斥锁 —— 防止同一数据源被并发同步
+# GUI 手动同步 / API 触发 / 定时调度可能各持独立 SyncEngine 实例，
+# 单靠实例内 _running 无法互斥，需进程内按 table_name 加锁。
+# ---------------------------------------------------------------------------
+
+_sync_locks: dict[str, threading.Lock] = {}
+_sync_locks_guard = threading.Lock()
+
+
+def _get_sync_lock(key: str) -> threading.Lock:
+    """按 key（数据表名）返回进程内共享的互斥锁（惰性创建）"""
+    with _sync_locks_guard:
+        lock = _sync_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _sync_locks[key] = lock
+        return lock
+
+
+def _is_source_busy(table_name: str) -> bool:
+    """该数据表是否正在同步（供 API 层在起线程前做快速判断）"""
+    with _sync_locks_guard:
+        lock = _sync_locks.get(table_name)
+    return lock is not None and lock.locked()
 
 
 class SyncEngine(QObject):
@@ -93,8 +121,23 @@ class SyncEngine(QObject):
         int | None
             本次写入行数，失败返回 None
         """
+        # 共享 SyncEngine 实例（GUI 用）重入守卫
+        if self._running:
+            self._log("WARNING", "同步引擎正在运行中，跳过本次请求")
+            return 0
         self._running = True
         self._stop_requested = False
+
+        # 预置错误处理器依赖的变量 —— source_cfg 缺失时（下方 raise）也会进入
+        # except 分支引用它们，若不预置会在错误处理器里抛 NameError 掩盖真实错误
+        source_cfg: dict = {}
+        table_name = source_key
+        api_source = ""
+        func_name = ""
+
+        # 每数据源互斥锁（进程级，覆盖 GUI/API/调度各自独立的 SyncEngine 实例）
+        sync_lock: threading.Lock | None = None
+        lock_held = False
 
         try:
             # 1. 获取数据源配置
@@ -105,6 +148,14 @@ class SyncEngine(QObject):
             table_name = source_cfg.get("table_name", source_key)
             func_name = source_cfg.get("api_function", "")
             api_source = source_cfg.get("api_source", "")
+
+            # 该数据源已在同步中则跳过本次请求（非阻塞获取）
+            sync_lock = _get_sync_lock(table_name)
+            if not sync_lock.acquire(blocking=False):
+                self._log("WARNING", f"[{source_key}] 该数据源正在同步中，跳过本次请求")
+                self.sync_completed.emit(source_key, 0)
+                return 0
+            lock_held = True
 
             self._log("INFO", f"开始同步 [{source_key}] -> {table_name}")
             self.sync_started.emit(source_key)
@@ -211,14 +262,16 @@ class SyncEngine(QObject):
             self._log("ERROR", f"[{source_key}] 未预期异常: {err_msg}")
             self.sync_error.emit(source_key, err_msg)
             self._update_job_error(
-                table_name if 'table_name' in dir() else source_key,
-                source_cfg if 'source_cfg' in dir() else {},
+                table_name,
+                source_cfg,
                 err_msg,
-                source_cfg.get("api_source", "") if 'source_cfg' in dir() else "",
-                source_cfg.get("api_function", "") if 'source_cfg' in dir() else "",
+                source_cfg.get("api_source", ""),
+                source_cfg.get("api_function", ""),
             )
             return None
         finally:
+            if sync_lock is not None and lock_held:
+                sync_lock.release()
             self._running = False
 
     # ------------------------------------------------------------------
@@ -355,7 +408,11 @@ class SyncEngine(QObject):
                             return parsed.max().date()
                 except Exception:
                     continue
-        return date.today()
+        # 找不到可解析的日期列 —— 回退为 None 而非 today：
+        # 若回退 today 会误写 last_sync_date=today，导致后续增量同步被永久跳过
+        # （数据源静默停更）。返回 None 让下次同步回到全量模式重新拉取。
+        logger.warning("数据中未找到可识别的日期列，last_sync_date 置空（下次将全量同步）")
+        return None
 
     # ------------------------------------------------------------------
     # 内部：错误状态回写

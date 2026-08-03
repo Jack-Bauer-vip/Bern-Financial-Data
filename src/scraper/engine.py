@@ -198,10 +198,10 @@ class ScrapeEngine:
         table_name = rule.get("table_name") or rule.get("name")
         date_column = rule.get("date_column")
 
-        # 确保表存在
+        # 确保表存在并补齐新增列（ensure_columns 内部会先建表）
         from src.core.dynamic_schema import DynamicSchemaManager
         schema = DynamicSchemaManager(self.repo)
-        schema.ensure_table_exists(table_name, list(df.columns))
+        schema.ensure_columns(table_name, list(df.columns))
 
         # 唯一键（有日期列则按日期去重）
         unique_key = [date_column] if date_column else None

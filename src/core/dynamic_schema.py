@@ -18,7 +18,8 @@ class DynamicSchemaManager:
         if self.repo.table_exists(table_name):
             return
         from sqlalchemy import text
-        cols = [f'"{c}" TEXT' for c in df_columns]
+        # 列名来自导入/抓取等不可信输入，必须转义（复用 repository 的 SQLite 转义）
+        cols = [f'{DataRepository._quote_column(c)} TEXT' for c in df_columns]
         sql = (
             f'CREATE TABLE IF NOT EXISTS "{table_name}" (\n'
             f'    id INTEGER PRIMARY KEY AUTOINCREMENT,\n'

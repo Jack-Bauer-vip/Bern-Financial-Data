@@ -1,5 +1,6 @@
 """FastAPI 本地数据服务管理 — 连接追踪 + uvicorn 生命周期"""
 
+import secrets
 import threading
 import time
 from datetime import datetime
@@ -35,7 +36,8 @@ class ConnectionTrackingMiddleware(BaseHTTPMiddleware):
 class AuthMiddleware(BaseHTTPMiddleware):
     """API token 鉴权
 
-    校验 X-API-Key 请求头或 ?token= 查询参数。
+    仅校验 X-API-Key 请求头（不再接受 ?token= 查询参数——token 放进
+    URL 会泄露到访问日志 / 浏览器历史）。
     - 未配置 token（API_TOKEN 为空）→ 放行（兼容开发模式）
     - 已配置 token → 请求必须带正确 token，否则 401
     - 公开端点（/health、/docs、/openapi.json、/）豁免
@@ -63,12 +65,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if path == p or path == f"/api/v1{p}":
                 return await call_next(request)
 
-        # 校验 token（头优先，其次查询参数）
+        # 校验 token（常数时间比较，防时序侧信道）
         provided = request.headers.get("x-api-key", "")
-        if not provided:
-            provided = request.query_params.get("token", "")
 
-        if provided != self.api_token:
+        if not provided or not secrets.compare_digest(provided, self.api_token):
             from fastapi.responses import JSONResponse
             return JSONResponse(
                 status_code=401,
@@ -113,11 +113,12 @@ class FastAPIServer:
         """
         # 鉴权（先加 → 后执行，让连接追踪先记录）
         self.app.add_middleware(AuthMiddleware)
-        # CORS
+        # CORS：本地服务开放所有来源；不携带凭据（allow_credentials=True 与
+        # allow_origins=["*"] 组合非法且会被浏览器拒绝）。鉴权走 X-API-Key 头。
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
-            allow_credentials=True,
+            allow_credentials=False,
             allow_methods=["*"],
             allow_headers=["*"],
         )

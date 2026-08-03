@@ -138,10 +138,15 @@ def test_macro_generic_date_range_desc(client):
 
 
 def test_macro_unknown_table(client):
-    """不存在的表返回空而非报错"""
+    """不存在的表 → 404（防任意表枚举）"""
     r = client.get("/api/v1/macro/not_a_real_table_xyz")
-    assert r.status_code == 200
-    assert r.json()["data"] == []
+    assert r.status_code == 404
+
+
+def test_macro_rejects_meta_table(client):
+    """meta 元数据表不可通过 /macro 查询（防信息泄露）"""
+    r = client.get("/api/v1/macro/meta_sync_jobs")
+    assert r.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -271,9 +276,10 @@ def test_auth_correct_header_200(client_with_token):
     assert r.status_code == 200
 
 
-def test_auth_correct_query_param_200(client_with_token):
+def test_auth_query_param_rejected_401(client_with_token):
+    """token 放查询参数会被拒绝（防 URL 泄露到访问日志）"""
     r = client_with_token.get("/api/v1/data/tables?token=test-secret-123")
-    assert r.status_code == 200
+    assert r.status_code == 401
 
 
 def test_auth_public_paths_exempt(client_with_token):

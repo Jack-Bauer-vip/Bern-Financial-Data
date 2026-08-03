@@ -1,5 +1,6 @@
 """API 路由 — 数据查询、元数据、连接监控、同步控制"""
 
+import threading
 import time
 from datetime import datetime
 
@@ -12,6 +13,9 @@ from src.api.schemas import (
 )
 
 router = APIRouter()
+
+# 限制同时进行的同步线程数，防止每次 /sync 请求都无上限创建线程
+_sync_semaphore = threading.BoundedSemaphore(4)
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +288,25 @@ async def query_cpi(
     return DataResponse(data=data, total=total)
 
 
+def _macro_table_names() -> set[str]:
+    """收集宏观数据表名白名单（来自数据分类目录的 macro 分类）
+
+    用于 /macro/{table_name} 白名单校验，防止把任意表（尤其 meta_* 元数据表）
+    暴露为可查询对象。
+    """
+    try:
+        from src.core.fetcher_registry import FetcherRegistry
+        from src.utils.config import ConfigManager
+        reg = FetcherRegistry(ConfigManager())
+        return {
+            cfg.get("table_name")
+            for cfg in reg.get_macro_sources()
+            if cfg.get("table_name")
+        }
+    except Exception:
+        return set()
+
+
 @router.get("/macro/{table_name}", tags=["宏观数据"])
 async def query_macro_generic(
     table_name: str,
@@ -292,14 +315,28 @@ async def query_macro_generic(
     limit: int = Query(500, le=10000),
     repo=Depends(get_repo),
 ):
-    """通用宏观数据查询（按表名，支持日期区间过滤）"""
+    """通用宏观数据查询（按表名，支持日期区间过滤）
+
+    表名必须命中宏观数据白名单（macro_ 前缀数据表），否则 404，
+    防止通过本端点枚举/查询任意表（含 meta_* 元数据表）。
+    """
+    # 白名单校验：只允许宏观数据表（兼容传入完整表名或去掉 macro_ 前缀）
+    macro_tables = _macro_table_names()
+    if f"macro_{table_name}" in macro_tables:
+        query_name = f"macro_{table_name}"
+    elif table_name in macro_tables:
+        query_name = table_name
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"宏观数据表 {table_name} 不存在或不可查询",
+        )
+
     try:
-        df = repo.query(f"macro_{table_name}", limit=limit)
+        df = repo.query(query_name, limit=limit)
     except Exception:
-        try:
-            df = repo.query(table_name, limit=limit)
-        except Exception:
-            return DataResponse(data=[], total=0, message=f"表 {table_name} 不存在或无数据")
+        # 白名单内的表可能尚未同步（库中还没有该表），优雅返回空
+        return DataResponse(data=[], total=0, message=f"表 {table_name} 暂无数据")
 
     if not df.empty:
         # 日期区间过滤
@@ -432,20 +469,35 @@ async def query_data_table(
 async def trigger_sync(source_key: str):
     """触发指定数据源的同步（异步执行）"""
     from src.core.data_fetcher import DataFetcher
-    from src.core.sync_engine import SyncEngine
+    from src.core.sync_engine import SyncEngine, _is_source_busy
     from src.core.dynamic_schema import DynamicSchemaManager
     from src.core.fetcher_registry import FetcherRegistry
     from src.db.engine import get_engine
     from src.db.repository import DataRepository
     from src.utils.config import ConfigManager
-    import threading
 
     # ★ 先校验数据源是否存在，避免后台线程空跑报错
     registry = FetcherRegistry(ConfigManager())
-    if not registry.get_source(source_key):
+    source_cfg = registry.get_source(source_key)
+    if not source_cfg:
         raise HTTPException(
             status_code=404,
             detail=f"未找到数据源: {source_key}，可用源见 /sources",
+        )
+
+    # 该数据源正在同步 → 409（SyncEngine 内部还有每源锁兜底）
+    table_name = source_cfg.get("table_name", source_key)
+    if _is_source_busy(table_name):
+        raise HTTPException(
+            status_code=409,
+            detail=f"数据源 {source_key} 正在同步中，请稍后再试",
+        )
+
+    # 并发同步线程已达上限 → 429
+    if not _sync_semaphore.acquire(blocking=False):
+        raise HTTPException(
+            status_code=429,
+            detail="并发同步任务过多，请稍后再试",
         )
 
     config = ConfigManager()
@@ -456,7 +508,10 @@ async def trigger_sync(source_key: str):
     sync = SyncEngine(fetcher, repo, schema, config)
 
     def _run():
-        sync.run(source_key)
+        try:
+            sync.run(source_key)
+        finally:
+            _sync_semaphore.release()
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()

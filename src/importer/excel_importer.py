@@ -1,4 +1,8 @@
-"""Excel 导入器 — 读取 xlsx 文件为 DataFrame（openpyxl 引擎）"""
+"""Excel 导入器 — 读取 xlsx 文件为 DataFrame（openpyxl 引擎）
+
+注意：openpyxl 仅支持 .xlsx，不支持旧版 .xls 二进制格式，
+因此只声明 .xlsx，避免误导用户（.xls 会直接导入失败）。
+"""
 
 import pandas as pd
 
@@ -9,7 +13,7 @@ class ExcelImporter(BaseImporter):
     """Excel (xlsx) 导入器"""
 
     extension = ".xlsx"
-    file_filter = "Excel 文件 (*.xlsx *.xls)"
+    file_filter = "Excel 文件 (*.xlsx)"
 
     def read(self, path: str) -> pd.DataFrame:
         try:

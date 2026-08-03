@@ -18,10 +18,10 @@ from src.importer.csv_importer import CsvImporter
 from src.importer.excel_importer import ExcelImporter
 
 # 导入器注册表（与文件扩展名对应）
+# 注意：openpyxl 不支持旧版 .xls 二进制，故仅注册 .xlsx
 IMPORTERS = {
     ".csv": (CsvImporter, "CSV 文件 (*.csv)"),
-    ".xlsx": (ExcelImporter, "Excel 文件 (*.xlsx *.xls)"),
-    ".xls": (ExcelImporter, "Excel 文件 (*.xlsx *.xls)"),
+    ".xlsx": (ExcelImporter, "Excel 文件 (*.xlsx)"),
 }
 
 
@@ -265,8 +265,8 @@ class ImportDialog(QDialog):
         """多选导入文件并启动识别"""
         if self._thread is not None:
             return
-        filters = ("数据文件 (*.csv *.xlsx *.xls);;CSV 文件 (*.csv);;"
-                   "Excel 文件 (*.xlsx *.xls)")
+        filters = ("数据文件 (*.csv *.xlsx);;CSV 文件 (*.csv);;"
+                   "Excel 文件 (*.xlsx)")
         paths, _ = QFileDialog.getOpenFileNames(
             self, "选择要导入的文件（可多选）", "", filters)
         if not paths:

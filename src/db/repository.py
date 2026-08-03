@@ -17,6 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.utils.config import ConfigManager
@@ -662,7 +663,12 @@ class DataRepository:
                     first_seen_at=_now_utc(),
                 )
                 session.add(entry)
-                session.commit()
+                try:
+                    session.commit()
+                except IntegrityError:
+                    # 并发加列：另一线程已写入同一 (table_name, column_name)
+                    # 或抢占了同一 id，回滚忽略，功能等价
+                    session.rollback()
 
     def get_column_registry(self, table_name: str) -> list[ColumnRegistry]:
         """查询某张表所有已注册的动态列"""

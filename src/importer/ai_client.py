@@ -223,19 +223,6 @@ class AiClient:
 
         system : 自定义 system 提示（空则用默认"金融数据导入助手"）
         """
-        if not isinstance(data, dict):
-            return None
-        return data
-
-    # ------------------------------------------------------------------
-    # 内部
-    # ------------------------------------------------------------------
-
-    def _chat(self, prompt: str, system: str = "") -> Optional[str]:
-        """调用聊天端点，返回 assistant 文本（失败返回 None）
-
-        system : 自定义 system 提示（空则用默认"金融数据导入助手"）
-        """
         sys_content = system or "你是金融数据导入助手，根据列名和样本值判断应导入哪张数据库表。"
         try:
             if self.provider == "ollama":
