@@ -394,6 +394,17 @@ categories:
     table_name: stock_daily
     has_incremental: true
     incremental_field: date
+    # 统一中文列 → 规范英文列（与 CSV 导入的表头一致），并注入 symbol 列
+    column_map:
+      日期: date
+      股票代码: symbol
+      开盘: open
+      收盘: close
+      最高: high
+      最低: low
+      成交量: volume
+      成交额: amount
+    code_column: symbol
     params_template:
       symbol:
         type: text
@@ -458,8 +469,18 @@ categories:
     table_name: fund_etf_daily
     has_incremental: true
     incremental_field: date
+    # 统一中文列 → 规范英文列（与 CSV 导入的表头一致），并注入 code 列
+    column_map:
+      日期: date
+      开盘: open
+      收盘: close
+      最高: high
+      最低: low
+      成交量: volume
+      成交额: amount
+    code_column: code
     params_template:
-      code:
+      symbol:
         type: text
         label: 基金代码
         default: '510050'

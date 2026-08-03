@@ -70,9 +70,15 @@ class BatchIdentifyWorker(QObject):
         self.ai_client = ai_client
         self.paths = paths
         self.suggested_table = suggested_table
+        # 识别阶段数据库不会变化 → 同一目标表只全表加载/统计一次
+        self._table_snapshots: dict[str, pd.DataFrame] = {}
+        self._dup_counts: dict[tuple, int] = {}
 
     def run(self) -> None:
-        from src.importer.matcher import match_table, collect_tables
+        from src.importer.matcher import (
+            match_table, collect_tables, detect_fund_code,
+            FUND_TABLE, FUND_CANONICAL_COLUMNS,
+        )
         from src.importer.column_mapper import map_columns
         from src.core.unique_key import infer_unique_cols_by_table
 
@@ -88,37 +94,62 @@ class BatchIdentifyWorker(QObject):
 
                 # 目标表识别（规则优先，AI 兜底）
                 item.status = "识别中..."
-                res = match_table(
-                    item.df,
-                    self.repo,
-                    tables_meta=tables_meta,
-                    ai_client=self.ai_client,
-                    filename=os.path.basename(path),
-                )
-                item.table_name = res.table_name if res else ""
-                item.confidence = res.confidence if res else 0.0
-                item.method = res.method if res else "rules"
-                item.low_confidence = res.low_confidence if res else False
-                item.reason = res.reason if res else ""
+                fund_code = detect_fund_code(path)
+                if fund_code:
+                    # ★ 文件名含 6 位基金代码 → 直接路由到基金表并注入 code 列，
+                    #   使同一基金的 CSV 上传 / API 同步按 (code,date) 合并去重
+                    item.table_name = FUND_TABLE
+                    item.confidence = 1.0
+                    item.method = "rules"
+                    item.reason = f"从文件名识别基金代码 {fund_code}"
+                    item.df["code"] = fund_code
+                    table_cols = list(FUND_CANONICAL_COLUMNS)
+                else:
+                    res = match_table(
+                        item.df,
+                        self.repo,
+                        tables_meta=tables_meta,
+                        ai_client=self.ai_client,
+                        filename=os.path.basename(path),
+                    )
+                    item.table_name = res.table_name if res else ""
+                    item.confidence = res.confidence if res else 0.0
+                    item.method = res.method if res else "rules"
+                    item.reason = res.reason if res else ""
 
-                if not item.table_name:
-                    item.status = "错误"
-                    item.error = "未能识别目标表，请在列表中手动选择"
-                    self.file_done.emit(path, item)
-                    continue
+                    if not item.table_name:
+                        item.status = "错误"
+                        item.error = "未能识别目标表，请在列表中手动选择"
+                        self.file_done.emit(path, item)
+                        continue
+                    table_cols = self.repo.get_all_existing_columns(item.table_name)
 
                 # 列映射 + 新字段检测
-                table_cols = self.repo.get_all_existing_columns(item.table_name)
                 item.plan = map_columns(
                     list(item.df.columns), table_cols, self.ai_client)
+                # 低置信标记属于列映射结果（AI 映射置信度较低），不在 MatchResult 上
+                item.low_confidence = item.plan.low_confidence
 
                 # 唯一键
                 item.unique_key = infer_unique_cols_by_table(item.table_name)
 
                 # 影响估算（对映射后的 df）
+                # 性能：同一目标表本批只全表加载/重复计数一次（识别阶段库不变），
+                # 上千个同表头文件不再每文件 O(表大小) 扫全表。
+                if item.table_name not in self._table_snapshots:
+                    self._table_snapshots[item.table_name] = self.repo.query(
+                        item.table_name, limit=None)
+                cols = self.repo.resolve_date_columns(
+                    item.table_name, item.unique_key or [])
+                dup_key = (item.table_name, tuple(cols))
+                if dup_key not in self._dup_counts:
+                    self._dup_counts[dup_key] = self.repo.get_duplicate_count(
+                        item.table_name, cols)
                 mapped_df = item.plan.apply(item.df)
                 item.analysis = self.repo.analyze_import(
-                    item.table_name, mapped_df, item.unique_key or None)
+                    item.table_name, mapped_df, item.unique_key or None,
+                    existing_df=self._table_snapshots[item.table_name],
+                    dup_in_db=self._dup_counts[dup_key])
 
                 new_note = (f"，{len(item.plan.new_columns)}个新字段"
                             if item.plan.new_columns else "")
@@ -158,6 +189,17 @@ class ImportDialog(QDialog):
         from src.importer.matcher import collect_tables
         self._tables_meta = collect_tables(repo)
         self._table_names = [t.table_name for t in self._tables_meta]
+        # 加入数据分类目录中定义、但尚未建表的数据源（如 fund_etf_daily），
+        # 使用户可在下拉中手动选择目标表（首个文件导入时会自动建表）
+        try:
+            from src.core.fetcher_registry import FetcherRegistry
+            from src.utils.config import ConfigManager
+            for src in FetcherRegistry(ConfigManager()).get_all_sources():
+                tn = src.get("table_name")
+                if tn and tn not in self._table_names:
+                    self._table_names.append(tn)
+        except Exception:
+            pass
         if self.suggested_table and self.suggested_table not in self._table_names:
             self._table_names.insert(0, self.suggested_table)
 
@@ -430,9 +472,17 @@ class ImportDialog(QDialog):
             return
         from src.importer.column_mapper import map_columns
         from src.core.unique_key import infer_unique_cols_by_table
+        from src.importer.matcher import detect_fund_code, FUND_TABLE, FUND_CANONICAL_COLUMNS
 
         item.table_name = table_name
         table_cols = self.repo.get_all_existing_columns(table_name)
+        if not table_cols and table_name == FUND_TABLE:
+            # 基金表尚未创建 → 用规范列映射，并确保注入 code 列
+            table_cols = list(FUND_CANONICAL_COLUMNS)
+            if "code" not in item.df.columns:
+                code = detect_fund_code(path)
+                if code:
+                    item.df["code"] = code
         item.plan = map_columns(list(item.df.columns), table_cols)  # 纯规则
         item.unique_key = infer_unique_cols_by_table(table_name)
         mapped_df = item.plan.apply(item.df)

@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, Signal, QDate
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QLabel, QLineEdit, QDateEdit,
-    QComboBox, QPushButton, QMenu, QCheckBox,
+    QComboBox, QPushButton, QMenu, QCheckBox, QToolButton,
 )
 
 
@@ -17,6 +17,7 @@ class ParamPanel(QWidget):
     syncClicked = Signal()
     initClicked = Signal()
     testClicked = Signal()
+    updateMethodSelected = Signal(str)  # "api" | "file" | "scrape"
 
     # 控件类型映射
     CONTROL_TYPE_MAP = {
@@ -49,6 +50,17 @@ class ParamPanel(QWidget):
 
         # 无参数提示（默认显示，被动态控件覆盖）
         self._no_param_label = None
+
+        # ★ 本地筛选 — 代码下拉（由 MainWindow 用本地表已有代码填充）
+        self._local_filter_group = QGroupBox("本地筛选")
+        local_layout = QHBoxLayout(self._local_filter_group)
+        self.local_code_combo = QComboBox()
+        self.local_code_combo.addItem("全部")
+        self.local_code_combo.setMinimumWidth(120)
+        local_layout.addWidget(QLabel("代码:"))
+        local_layout.addWidget(self.local_code_combo)
+        local_layout.addStretch()
+        layout.addWidget(self._local_filter_group)
 
         # ★ 常驻日期范围 — 所有数据源都可见
         self._date_group = QGroupBox("日期范围")
@@ -85,7 +97,28 @@ class ParamPanel(QWidget):
         self.query_btn.clicked.connect(self.queryClicked.emit)
 
         self.sync_btn = QPushButton("增量同步")
+        self.sync_btn.setStyleSheet(
+            "QPushButton { background-color: #2E7D32; color: white; "
+            "padding: 6px 14px; border-radius: 4px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #1B5E20; }"
+        )
+        # 直接点击 = API 增量同步（旧行为，必定有反应）
         self.sync_btn.clicked.connect(self.syncClicked.emit)
+
+        # 更多更新方式：导入本地文件 / 数据抓取
+        update_menu = QMenu(self)
+        self.update_file_action = update_menu.addAction("导入本地文件")
+        self.update_file_action.setData("file")
+        self.update_scrape_action = update_menu.addAction("数据抓取")
+        self.update_scrape_action.setData("scrape")
+        for action in (self.update_file_action, self.update_scrape_action):
+            action.triggered.connect(
+                lambda _checked=False, a=action: self.updateMethodSelected.emit(a.data()))
+        self.more_update_btn = QToolButton()
+        self.more_update_btn.setText("更多更新 ▼")
+        self.more_update_btn.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.more_update_btn.setMenu(update_menu)
 
         self.init_btn = QPushButton("初始化向导")
         self.init_btn.clicked.connect(self.initClicked.emit)
@@ -107,6 +140,7 @@ class ParamPanel(QWidget):
 
         btn_layout.addWidget(self.query_btn)
         btn_layout.addWidget(self.sync_btn)
+        btn_layout.addWidget(self.more_update_btn)
         btn_layout.addWidget(self.init_btn)
         btn_layout.addWidget(self.test_btn)
         btn_layout.addStretch()
@@ -290,3 +324,24 @@ class ParamPanel(QWidget):
 
     def get_template(self) -> dict:
         return self._current_template
+
+    # ------------------------------------------------------------------
+    # 本地筛选（代码下拉）
+    # ------------------------------------------------------------------
+
+    def setLocalCodes(self, codes: list[str]) -> None:
+        """用本地表已有代码填充下拉（保留当前选择；默认「全部」）"""
+        current = self.local_code_combo.currentText()
+        self.local_code_combo.blockSignals(True)
+        self.local_code_combo.clear()
+        self.local_code_combo.addItem("全部")
+        for c in codes or []:
+            self.local_code_combo.addItem(str(c))
+        idx = self.local_code_combo.findText(current)
+        self.local_code_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.local_code_combo.blockSignals(False)
+
+    def getSelectedLocalCode(self) -> str:
+        """当前选中的本地代码（「全部」返回空字符串）"""
+        text = self.local_code_combo.currentText()
+        return "" if not text or text == "全部" else text

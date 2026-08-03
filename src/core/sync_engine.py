@@ -44,6 +44,67 @@ def _is_source_busy(table_name: str) -> bool:
     return lock is not None and lock.locked()
 
 
+# ---------------------------------------------------------------------------
+# 行情列规范化
+#
+# akshare 行情接口返回中文列（日期/开盘/收盘/...），而 CSV 导入写入的是规范
+# 英文列（date/open/... + code/symbol）。为让 API 更新与 CSV 上传合并到同一表、
+# 并按 (code,date)/(symbol,date) 去重，同步前统一列名并注入代码列。
+# column_map 从 data_catalog.yaml 的节点配置读取（无则用 fund 兜底映射）。
+# ---------------------------------------------------------------------------
+
+FUND_TABLE = "fund_etf_daily"
+
+# fund 兜底列映射（data_catalog.yaml 的 fund.etf_daily 未配 column_map 时用）
+_FUND_COLUMN_MAP = {
+    "日期": "date", "开盘": "open", "收盘": "close",
+    "最高": "high", "最低": "low", "成交量": "volume", "成交额": "amount",
+}
+
+_FUND_KEEP_COLUMNS = ("date", "open", "high", "low", "close", "volume", "amount")
+
+# 规范列优先顺序（重排用；多余的保持原序追加）
+_PREFERRED_CANONICAL = ("date", "open", "high", "low", "close", "volume",
+                        "amount", "code", "symbol")
+
+
+def _apply_column_map(
+    df: pd.DataFrame,
+    column_map: dict | None,
+    code: str,
+    code_col: str,
+) -> pd.DataFrame:
+    """按 column_map 重命名列并注入代码列
+
+    column_map : 源列 → 规范列（None/空则只做代码列注入）
+    code       : 注入的代码值（为空则不注入）
+    code_col   : 注入到哪个列（"symbol" 或 "code"）
+    """
+    if df is None or df.empty:
+        return df
+    df = df.rename(columns=column_map or {})
+    if code and code_col and code_col not in df.columns:
+        df[code_col] = code
+    # 声明了 column_map 时只保留映射到的规范列 + 代码列，丢弃未映射的额外列
+    # （如振幅/涨跌幅/换手率），并重排为规范列顺序，保持本地表列结构整洁
+    if column_map:
+        keep = set(column_map.values())
+        if code_col:
+            keep.add(code_col)
+        drop = [c for c in df.columns if c not in keep]
+        if drop:
+            df = df.drop(columns=drop)
+        ordered = [c for c in _PREFERRED_CANONICAL if c in df.columns]
+        ordered += [c for c in df.columns if c not in ordered]
+        df = df[ordered]
+    return df
+
+
+def _canonicalize_fund_df(df: pd.DataFrame, code: str) -> pd.DataFrame:
+    """基金行情结果规范化为 date/open/high/low/close/volume/amount/code（兼容旧调用）"""
+    return _apply_column_map(df, _FUND_COLUMN_MAP, code, "code")
+
+
 class SyncEngine(QObject):
     """增量同步引擎，协调获取、清洗、写入全流程
 
@@ -104,6 +165,7 @@ class SyncEngine(QObject):
         source_key: str,
         history_years: int = 3,
         full_refresh: bool = False,
+        params_override: dict | None = None,
     ) -> int | None:
         """执行单个数据源的增量同步
 
@@ -115,6 +177,8 @@ class SyncEngine(QObject):
             首次同步时拉取的历史年数，默认 3 年
         full_refresh : bool
             是否全部重新拉取（忽略 last_sync_date），默认 False
+        params_override : dict | None
+            覆盖默认参数（如 GUI 用户输入的 symbol/code），优先于 params_template.default
 
         Returns
         -------
@@ -166,25 +230,51 @@ class SyncEngine(QObject):
 
             # 3. 构建请求参数
             params: dict[str, Any] = {}
+            override = params_override or {}
 
             # ★ 注入代码类参数（指数/基金等需要 symbol/code 的源）：
-            #   从 params_template 的 default 取，避免同步时缺代码静默拉错数据
+            #   params_override（GUI 用户输入）优先，其次 params_template 的 default，
+            #   避免同步时缺代码静默拉错数据
             for pkey in ("symbol", "code"):
-                if pkey in (source_cfg.get("params_template") or {}):
+                if pkey in override and str(override.get(pkey, "")).strip():
+                    params[pkey] = str(override[pkey]).strip()
+                elif pkey in (source_cfg.get("params_template") or {}):
                     default = source_cfg["params_template"][pkey].get("default", "")
                     if default:
                         params[pkey] = str(default)
 
-            if full_refresh or last_date is None:
+            # 代码值（写入 symbol/code 列用，需在 param_map 重命名前取到）
+            code_value = str(params.get("code") or params.get("symbol") or "")
+            code_col = source_cfg.get("code_column")
+            if not code_col:
+                code_col = ("symbol" if "symbol" in (source_cfg.get("params_template") or {})
+                            else "code" if "code" in (source_cfg.get("params_template") or {})
+                            else "")
+
+            # 增量起点：有 code 时优先用该 code 的实际数据最大日期（防 last_sync_date
+            # 污染 / 与多 code 表脱节），否则用表级 last_sync_date
+            start_ref = last_date
+            if code_value and code_col:
+                actual = self.repo.get_max_date(table_name, code_col, code_value)
+                if actual:
+                    try:
+                        actual_d = date.fromisoformat(str(actual))
+                        if last_date is None or actual_d > last_date:
+                            start_ref = actual_d
+                    except ValueError:
+                        pass
+
+            if full_refresh or start_ref is None:
                 # 首次或无历史 -> 回退到固定历史区间
                 params["start_date"] = (date.today() - timedelta(days=365 * history_years)).isoformat()
                 params["end_date"] = date.today().isoformat()
                 self._log("INFO", f"全量模式: {params['start_date']} ~ {params['end_date']}")
             else:
-                # 增量模式：从上一次同步日期的次日起
-                start = last_date + timedelta(days=1)
+                # 增量模式：从参考日期（实际数据 max 或 last_sync_date）的次日起
+                start = start_ref + timedelta(days=1)
                 if start >= date.today():
-                    self._log("INFO", "上次同步日期为今天或以后，无需增量同步")
+                    self._log("INFO",
+                              f"[{source_key}] {code_value or ''} 数据已到 {start_ref.isoformat()}，无需增量同步")
                     self.sync_completed.emit(source_key, 0)
                     return 0
                 params["start_date"] = start.isoformat()
@@ -206,6 +296,14 @@ class SyncEngine(QObject):
                 self._log("INFO", f"[{source_key}] 无新数据")
                 self.sync_completed.emit(source_key, 0)
                 return 0
+
+            # ★ 行情列规范化：按节点 column_map 统一中文列 → 规范英文列，并注入
+            #   代码列（stock→symbol、fund→code、index→symbol）。使 API 更新与
+            #   CSV 导入写入同一表、按 (code,date)/(symbol,date) 合并去重。
+            #   code_col 已在上方按 code_column 配置 / API 参数名解析。
+            column_map = source_cfg.get("column_map")
+            if column_map or (code_value and code_col):
+                df = _apply_column_map(df, column_map, code_value, code_col)
 
             self.sync_progress.emit(source_key, 0, len(df))
             self._log("INFO", f"获取到 {len(df)} 行原始数据")

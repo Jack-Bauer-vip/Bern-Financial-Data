@@ -89,3 +89,31 @@ def test_suggest_mapping_direct():
     m = suggest_mapping(["日期"], ["时间", "date"])
     # 表有两个日期类列 → 模糊不匹配，规则给出 date 精确命中前走别名
     assert "日期" in m  # 至少映射到一个
+
+
+def test_map_columns_cached_same_header():
+    """同列名文件只映射一次：第二次命中会话缓存，不重复调 AI"""
+    from src.importer.column_mapper import clear_mapping_cache
+
+    class _CountingAI:
+        def __init__(self):
+            self.calls = 0
+
+        def is_available(self):
+            return True
+
+        def map_columns(self, file_cols, table_cols):
+            self.calls += 1
+            return {"利率": "rate"}
+
+    ai = _CountingAI()
+    clear_mapping_cache()  # 排除其他用例的缓存残留
+    cols = ["时间", "利率"]
+    table_cols = ["id", "时间", "rate", "created_at"]
+
+    r1 = map_columns(cols, table_cols, ai_client=ai)
+    r2 = map_columns(cols, table_cols, ai_client=ai)
+
+    assert ai.calls == 1                      # 只调一次 AI
+    assert r1.mapping["利率"] == "rate"
+    assert r2.mapping["利率"] == r1.mapping["利率"]

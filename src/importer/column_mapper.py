@@ -18,6 +18,7 @@ COLUMN_ALIASES: dict[str, list[str]] = {
     "日期": ["date", "trade_date", "时间", "发布日期", "报告期", "月份"],
     "月份": ["date", "日期", "时间", "trade_date"],
     "date": ["日期", "时间", "日期", "trade_date", "发布日期"],
+    "trade_time": ["date", "日期", "trade_date"],
     "trade_date": ["日期", "时间", "date"],
     "发布日期": ["日期", "时间", "date"],
     "报告期": ["日期", "时间", "date"],
@@ -32,6 +33,7 @@ COLUMN_ALIASES: dict[str, list[str]] = {
     "low": ["最低", "最低价"],
     "成交量": ["volume", "成交量"],
     "volume": ["成交量"],
+    "vol": ["volume", "成交量"],
     "成交额": ["amount", "成交额"],
     "amount": ["成交额"],
     "涨跌幅": ["pct_chg", "涨跌幅"],
@@ -141,6 +143,18 @@ class ColumnMappingResult:
         return out.rename(columns=self.mapping)
 
 
+# 会话级列映射缓存：同文件列 × 同目标表列 → 复用映射结果
+# ai_client.map_columns 只依赖列名（无样本值），按列名缓存完全正确。
+# 批量导入同表头文件时避免重复规则映射与 AI 调用。
+_mapping_cache: dict[tuple, ColumnMappingResult] = {}
+_MAX_MAPPING_CACHE = 1000
+
+
+def clear_mapping_cache() -> None:
+    """清空列映射会话缓存"""
+    _mapping_cache.clear()
+
+
 def map_columns(
     file_columns: list[str],
     table_columns: list[str],
@@ -150,6 +164,26 @@ def map_columns(
 
     防冲突：同一表列被多个文件列映射时，只保留第一个。
     """
+    # 会话级缓存：同文件列 + 同目标表列 → 复用首次映射结果
+    key = (tuple(sorted(file_columns)), tuple(sorted(table_columns)),
+           ai_client is not None)
+    cached = _mapping_cache.get(key)
+    if cached is not None:
+        return cached
+
+    result = _map_columns_compute(file_columns, table_columns, ai_client)
+    if len(_mapping_cache) >= _MAX_MAPPING_CACHE:
+        _mapping_cache.clear()
+    _mapping_cache[key] = result
+    return result
+
+
+def _map_columns_compute(
+    file_columns: list[str],
+    table_columns: list[str],
+    ai_client,
+) -> ColumnMappingResult:
+    """实际列映射计算（规则优先 → AI 兜底 → 新字段检测）"""
     result = ColumnMappingResult()
 
     # 1. 规则映射

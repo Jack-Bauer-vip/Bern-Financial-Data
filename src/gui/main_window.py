@@ -75,17 +75,20 @@ class SyncListWorker(QObject):
     finished = Signal()
     error = Signal(str)
 
-    def __init__(self, sync_engine: SyncEngine, source_keys: list[str], history_years: int = 3):
+    def __init__(self, sync_engine: SyncEngine, source_keys: list[str], history_years: int = 3,
+                 params: dict | None = None):
         super().__init__()
         self.sync_engine = sync_engine
         self.source_keys = source_keys
         self.history_years = history_years
+        self.params = params or {}
 
     def run(self) -> None:
         try:
             for key in self.source_keys:
                 try:
-                    self.sync_engine.run(key, self.history_years)
+                    self.sync_engine.run(
+                        key, self.history_years, params_override=self.params or None)
                 except Exception as exc:
                     self.error.emit(f"{key}: {exc}")
         finally:
@@ -117,15 +120,21 @@ class QueryWorker(QObject):
     finished = Signal(pd.DataFrame)
     error = Signal(str)
 
-    def __init__(self, repo: DataRepository, table_name: str, filters: dict = None):
+    def __init__(self, repo: DataRepository, table_name: str, filters: dict = None,
+                 date_from: str = None, date_to: str = None, limit: int = 5000):
         super().__init__()
         self.repo = repo
         self.table_name = table_name
         self.filters = filters
+        self.date_from = date_from
+        self.date_to = date_to
+        self.limit = limit
 
     def run(self) -> None:
         try:
-            df = self.repo.query(self.table_name, filters=self.filters, limit=5000)
+            df = self.repo.query(
+                self.table_name, filters=self.filters, limit=self.limit,
+                date_from=self.date_from, date_to=self.date_to)
             self.finished.emit(df)
         except Exception as exc:
             self.error.emit(str(exc))
@@ -444,6 +453,7 @@ class MainWindow(QMainWindow):
 
         self.param_panel.queryClicked.connect(self.on_query)
         self.param_panel.syncClicked.connect(self.on_sync_current)
+        self.param_panel.updateMethodSelected.connect(self.on_update_method)
         self.param_panel.initClicked.connect(self.on_init_wizard)
         self.param_panel.testClicked.connect(self._on_test_connection)
         self.param_panel.export_csv_action.triggered.connect(self._open_export_dialog)
@@ -740,6 +750,10 @@ class MainWindow(QMainWindow):
 
         # 4. 从数据库加载已有数据
         table_name = source.get("table_name")
+        # 刷新「本地已有代码」下拉（读表去重）
+        code_col = self._local_code_column(table_name) if table_name else None
+        codes = self.repo.get_distinct_values(table_name, code_col) if (table_name and code_col) else []
+        self.param_panel.setLocalCodes(codes)
         if table_name:
             try:
                 df = self.repo.query(table_name, limit=5000)
@@ -765,13 +779,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def on_query(self) -> None:
-        """在后台线程中执行查询
-
-        策略:
-        - 有 api_function → 调 API 实时获取（任何数据源类型）
-        - 无 api_function → 回退到数据库查询
-        - 日期范围在客户端过滤（API 返回后按 start_date/end_date 裁剪）
-        """
+        """查询本地表（纯本地，不联网）。联网获取改由「更新」承担。"""
         source_key = self._current_source_key
         if not source_key:
             self.log_widget.write("WARNING", "请先选择一个数据源")
@@ -794,71 +802,63 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("日期范围有误: 开始日期不能晚于结束日期", 5000)
             return
 
-        # ★ 代码类参数必填校验：指数/基金需要精确代码，缺代码会静默拉错数据
-        params_template = source.get("params_template") or {}
-        for pkey, pcfg in params_template.items():
-            if pkey in ("symbol", "code") and pcfg.get("type") == "text":
-                label = pcfg.get("label", pkey)
-                if not str(params.get(pkey, "")).strip():
-                    self.log_widget.write("WARNING",
-                        f"查询失败 [{source_key}]: {label}不能为空，请填写准确代码")
-                    self.statusBar().showMessage(
-                        f"请填写{label}（如指数代码 sh000001 / 基金代码 510050）", 5000)
-                    return
-
         table_name = source.get("table_name")
-        api_func = source.get("api_function")
+        if not table_name:
+            self.log_widget.write("WARNING", f"数据源 [{source_key}] 未配置表名")
+            return
 
-        if api_func:
-            # ★ 方式 A: 调 API 实时获取（使用 threading.Thread）
-            date_info = ""
-            if params.get("start_date") or params.get("end_date"):
-                date_info = f" [{params.get('start_date','')}~{params.get('end_date','')}]"
-            self.log_widget.write("INFO",
-                f"正在从 API 获取 [{source_key}]{date_info} ...")
-            self.statusBar().showMessage(f"正在获取: {source_key} ...")
+        # 代码筛选：优先本地代码下拉，其次输入的 symbol/code 参数
+        filters: dict = {}
+        code_col = self._local_code_column(table_name)
+        if code_col:
+            local_code = self.param_panel.getSelectedLocalCode()
+            if local_code:
+                filters[code_col] = local_code
+            elif params.get("symbol") or params.get("code"):
+                filters[code_col] = params.get("symbol") or params.get("code")
 
-            import threading
-            from src.core.data_fetcher import DataFetcher
-            from src.utils.config import ConfigManager
+        self.log_widget.write("INFO", f"正在查询本地表 [{table_name}] ...")
+        self.statusBar().showMessage(f"查询本地: {source_key} ...")
+        self._query_local_table(source_key, table_name, filters, sd, ed)
 
-            def run_api_fetch():
-                try:
-                    fetcher = DataFetcher(ConfigManager())
-                    df = fetcher.fetch(source, params)
-                    self._result_queue.put(
-                        lambda: self._on_api_result(source_key, source, df if df is not None else pd.DataFrame(), params))
-                except Exception as exc:
-                    self._result_queue.put(
-                        lambda e=exc: self._on_api_error(source_key, str(e)))
+    def _local_code_column(self, table_name: str) -> str | None:
+        """本地表里作为代码标识的列（code/symbol，取存在的那个）"""
+        existing = self.repo.get_all_existing_columns(table_name)
+        for c in ("code", "symbol"):
+            if c in existing:
+                return c
+        return None
 
-            t = threading.Thread(target=run_api_fetch, daemon=True)
-            t.start()
+    def _query_local_table(
+        self,
+        source_key: str,
+        table_name: str,
+        filters: dict,
+        date_from: str,
+        date_to: str,
+    ) -> None:
+        """在后台线程查询本地表（筛选 + 日期区间）"""
+        thread = QThread(self)
+        worker = QueryWorker(
+            self.repo, table_name, filters,
+            date_from=date_from or None, date_to=date_to or None, limit=5000)
+        # ★ 防 GC：worker 是局部变量，函数返回后被回收会导致 started 连接失效
+        #   （worker.run 永不执行）。挂到 thread 上保活，thread 由 self._threads 持有。
+        thread._worker_ref = worker
+        worker.moveToThread(thread)
 
-        else:
-            # ★ 方式 B: 从数据库查询（回退）
-            filters = {}
-            if params.get("symbol"):
-                filters["symbol"] = params["symbol"]
+        worker.finished.connect(
+            lambda df: self._on_query_result(source_key, df))
+        worker.error.connect(
+            lambda err: self._on_api_error(source_key, err))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
 
-            self.log_widget.write("INFO", f"正在从数据库查询 [{source_key}] ...")
-
-            thread = QThread(self)
-            worker = QueryWorker(self.repo, table_name, filters)
-            worker.moveToThread(thread)
-
-            worker.finished.connect(
-                lambda df: self._on_query_result(source_key, df))
-            worker.error.connect(
-                lambda err: self._on_api_error(source_key, err))
-            worker.finished.connect(thread.quit)
-            worker.finished.connect(worker.deleteLater)
-            thread.finished.connect(thread.deleteLater)
-
-            thread.started.connect(worker.run)
-            thread.start()
-            self._threads.append(thread)
-            thread.finished.connect(lambda: self._cleanup_thread(thread))
+        thread.started.connect(worker.run)
+        thread.start()
+        self._threads.append(thread)
+        thread.finished.connect(lambda: self._cleanup_thread(thread))
 
     def _on_api_result(self, source_key: str, source_cfg: dict,
                        df: pd.DataFrame, params: dict) -> None:
@@ -1225,11 +1225,32 @@ class MainWindow(QMainWindow):
             self.log_widget.write("INFO", "已取消同步")
             return
 
-        # 4. 后台顺序同步
+        # 4. 提取当前界面选中的代码传给同步，使增量同步对具体代码生效：
+        #    优先「本地筛选」下拉选中的代码，其次 symbol/code 输入框，最后默认
+        sync_params: dict = {}
+        src = self.registry.get_source(source_keys[0]) if source_keys else None
+        if src:
+            code_col = self._local_code_column(src.get("table_name"))
+            if code_col:
+                local_code = self.param_panel.getSelectedLocalCode()
+                if local_code:
+                    sync_params["symbol" if code_col == "symbol" else "code"] = local_code
+        if not sync_params:
+            params = self.param_panel.getParams()
+            for pkey in ("symbol", "code"):
+                val = str(params.get(pkey, "")).strip()
+                if val:
+                    sync_params[pkey] = val
+
+        # 5. 后台顺序同步
+        code_info = f" (代码={sync_params})" if sync_params else ""
         self.log_widget.write(
-            "INFO", f"开始同步 {len(source_keys)} 个数据源 ...")
+            "INFO", f"开始同步 {len(source_keys)} 个数据源{code_info} ...")
         thread = QThread(self)
-        worker = SyncListWorker(self.sync_engine, source_keys)
+        worker = SyncListWorker(self.sync_engine, source_keys, params=sync_params)
+        # ★ 防 GC：worker 是局部变量，函数返回后被回收会导致 started 连接失效
+        #   （worker.run 永不执行）。挂到 thread 上保活，thread 由 self._threads 持有。
+        thread._worker_ref = worker
         worker.moveToThread(thread)
 
         worker.finished.connect(thread.quit)
@@ -1249,6 +1270,8 @@ class MainWindow(QMainWindow):
 
         thread = QThread(self)
         worker = SyncAllWorker(self.sync_engine)
+        # ★ 防 GC：worker 局部变量函数返回后被回收，started 连接失效
+        thread._worker_ref = worker
         worker.moveToThread(thread)
 
         worker.finished.connect(thread.quit)
@@ -1273,13 +1296,22 @@ class MainWindow(QMainWindow):
         self.log_widget.write("ERROR", f"同步失败 [{source_key}]: {error}")
 
     def _refresh_current_table(self) -> None:
-        """刷新当前显示的数据表"""
+        """刷新当前显示的数据表（沿用当前代码/日期筛选）"""
         if self._current_source_key:
             source = self.registry.get_source(self._current_source_key)
             if source and source.get("table_name"):
+                params = self.param_panel.getParams()
+                filters: dict = {}
+                code_col = self._local_code_column(source["table_name"])
+                if code_col:
+                    local_code = self.param_panel.getSelectedLocalCode()
+                    if local_code:
+                        filters[code_col] = local_code
                 try:
                     df = self.repo.query(
-                        source["table_name"], limit=5000
+                        source["table_name"], filters=filters, limit=5000,
+                        date_from=params.get("start_date") or None,
+                        date_to=params.get("end_date") or None,
                     )
                     self.table_view.loadDataFrame(df)
                     self._update_row_count(df)
@@ -1287,6 +1319,55 @@ class MainWindow(QMainWindow):
                     self.log_widget.write(
                         "ERROR", f"刷新数据失败: {exc}"
                     )
+
+    # ------------------------------------------------------------------
+    # 更新方式（更新 ▼ 菜单）
+    # ------------------------------------------------------------------
+
+    def on_update_method(self, method: str) -> None:
+        """按用户选择的更新方式执行：api / file / scrape"""
+        if method == "api":
+            self.on_sync_current()
+        elif method == "file":
+            self._open_import_dialog()
+        elif method == "scrape":
+            self._run_scrape_for_current_table()
+        else:
+            self.log_widget.write("WARNING", f"未知更新方式: {method}")
+
+    def _run_scrape_for_current_table(self) -> None:
+        """抓取与当前表匹配的抓取规则；无匹配则打开抓取管理"""
+        table_name = None
+        if self._current_source_key:
+            source = self.registry.get_source(self._current_source_key)
+            table_name = source.get("table_name") if source else None
+        if not table_name:
+            self.log_widget.write("WARNING", "请先选择一个数据源")
+            return
+        from src.scraper.engine import ScrapeEngine
+        engine = ScrapeEngine(self.repo)
+        try:
+            rules = [r for r in engine.load_rules()
+                     if r.get("table_name") == table_name]
+        except Exception as exc:
+            self.log_widget.write("ERROR", f"加载抓取规则失败: {exc}")
+            return
+        if not rules:
+            self.log_widget.write(
+                "INFO", f"没有针对表 [{table_name}] 的抓取规则，打开抓取管理")
+            self._show_scrape_manager()
+            return
+        self.log_widget.write(
+            "INFO", f"正在抓取 {len(rules)} 条规则 → {table_name} ...")
+        for rule in rules:
+            try:
+                added = engine.run_by_name(rule.get("name"))
+                self.log_widget.write(
+                    "INFO", f"抓取 [{rule.get('name')}] 完成，写入 {added} 行")
+            except Exception as exc:
+                self.log_widget.write(
+                    "ERROR", f"抓取 [{rule.get('name')}] 失败: {exc}")
+        self._refresh_current_table()
 
     # ------------------------------------------------------------------
     # 初始化向导
@@ -1328,6 +1409,8 @@ class MainWindow(QMainWindow):
         worker = _InitSyncWorker(
             self.sync_engine, modules, history_years
         )
+        # ★ 防 GC：worker 局部变量函数返回后被回收，started 连接失效
+        thread._worker_ref = worker
         worker.moveToThread(thread)
 
         worker.finished.connect(thread.quit)
@@ -1336,6 +1419,8 @@ class MainWindow(QMainWindow):
 
         thread.started.connect(worker.run)
         thread.start()
+        self._threads.append(thread)
+        thread.finished.connect(lambda: self._cleanup_thread(thread))
 
     # ------------------------------------------------------------------
     # 导入

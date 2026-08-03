@@ -7,6 +7,7 @@
 且 AI 不可用（超时/无服务）时能安全降级回规则结果。
 """
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -272,6 +273,85 @@ def sample_values(df: pd.DataFrame, max_cols: int = 12) -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------
+# 基金/ETF 识别
+#
+# 用户的基金行情 CSV 通常是「每基金一个文件」（如 159001.csv），文件名含
+# 6 位基金代码。识别出代码后直接路由到 fund_etf_daily 表并注入 code 列，
+# 使同一基金的 CSV 上传与 API 同步按 (code, date) 合并去重。
+# ---------------------------------------------------------------------------
+
+# 基金数据目标表名（与 data_catalog.yaml 的 fund.etf_daily 节点一致）
+FUND_TABLE = "fund_etf_daily"
+
+# 基金行情表规范列（CSV 与 API 统一映射到这些列，保证合并）
+FUND_CANONICAL_COLUMNS = (
+    "date", "open", "high", "low", "close", "volume", "amount", "code",
+)
+
+# 基金/ETF 代码前缀（区分股票 000/300/600/688 等）
+_FUND_CODE_PREFIXES = ("15", "16", "50", "51", "52", "56", "58", "59")
+
+
+def detect_fund_code(filename: str) -> str | None:
+    """从文件名提取 6 位基金代码
+
+    例：159001.csv → '159001'；Data_518880.SH.csv → '518880'；
+    2026-06-22ETF.csv → None（日期串不匹配前缀）。
+    仅接受基金代码前缀，避免把股票代码（600519 等）误判为基金。
+    """
+    if not filename:
+        return None
+    base = os.path.basename(str(filename))
+    for m in re.finditer(r"(?<!\d)(\d{6})(?!\d)", base):
+        code = m.group(1)
+        if code.startswith(_FUND_CODE_PREFIXES):
+            return code
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 会话级识别缓存
+#
+# 批量导入上千个「同类型表头」文件时，每个文件都会重新跑一遍目标表识别
+# （规则评分 + 规则拿不准时调 AI）。识别结果只依赖文件结构与候选表结构，
+# 同表头文件可复用首次结果，避免重复 AI 调用。表结构变化时签名随之变化，
+# 缓存自动失效。
+# ---------------------------------------------------------------------------
+
+_match_cache: dict[tuple, MatchResult] = {}
+_MAX_CACHE_SIZE = 1000
+
+
+def header_signature(df: pd.DataFrame) -> tuple[tuple[str, str], ...]:
+    """文件结构签名：每列 (归一化列名, 样本类型 date/numeric/text)，排序后元组
+
+    同表头文件签名相同 → 复用上次识别结果；样本类型用于区分同名不同型数据。
+    """
+    if df is None or df.empty:
+        return ()
+    return tuple(
+        sorted((normalize_col(c), sample_dtype(df, c)) for c in df.columns)
+    )
+
+
+def tables_signature(tables: list[TableMeta]) -> tuple:
+    """候选表结构签名：表名 + 列 + 是否有数据（>0 粗粒度，避免同步频繁失效）"""
+    return tuple(
+        sorted(
+            (t.table_name, tuple(sorted(t.columns)), t.row_count > 0)
+            for t in tables
+        )
+    )
+
+
+def clear_identification_cache() -> None:
+    """清空识别/列映射的会话缓存（测试与维护用）"""
+    _match_cache.clear()
+    from src.importer import column_mapper
+    column_mapper.clear_mapping_cache()
+
+
 def match_table(
     df: pd.DataFrame,
     repo,
@@ -301,6 +381,29 @@ def match_table(
     if not tables:
         return MatchResult("", 0.0, "rules", reason="无候选表")
 
+    # 会话级缓存：同表头 + 同候选表结构 + 是否可用 AI → 复用首次识别结果。
+    # 键含 ai 可用性：有无 AI 时结果不同（规则 vs AI 兜底），分开缓存避免串用。
+    key = (header_signature(df), tables_signature(tables), threshold, exclude,
+           ai_client is not None)
+    cached = _match_cache.get(key)
+    if cached is not None:
+        return cached
+
+    result = _match_table_compute(df, ai_client, exclude, threshold, tables)
+    if len(_match_cache) >= _MAX_CACHE_SIZE:
+        _match_cache.clear()
+    _match_cache[key] = result
+    return result
+
+
+def _match_table_compute(
+    df: pd.DataFrame,
+    ai_client,
+    exclude: str | None,
+    threshold: float,
+    tables: list[TableMeta],
+) -> MatchResult:
+    """实际识别计算（规则优先，AI 兜底，AI 不可用降级回规则）"""
     matcher = RuleMatcher(tables)
     res, scored = matcher.best(df, exclude=exclude, threshold=threshold)
 

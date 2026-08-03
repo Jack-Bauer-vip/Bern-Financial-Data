@@ -424,12 +424,18 @@ class DataRepository:
         table_name: str,
         df: pd.DataFrame,
         unique_columns: list[str] | None = None,
+        existing_df: pd.DataFrame | None = None,
+        dup_in_db: int | None = None,
     ) -> dict:
         """估算导入影响：更新/新增/文件内重复/库内现存重复
 
         用于导入对话框预览。返回:
             total, to_insert, to_update, to_skip,
             dup_in_db, unique_columns, missing_unique_cols
+
+        可选参数（批量导入性能优化，识别阶段库不变时由调用方缓存传入）:
+            existing_df : 目标表已预加载的全量 DataFrame，传入则跳过内部全表查询
+            dup_in_db   : 已计算的库内重复组数，传入则跳过重复计数查询
         """
         result = {
             "total": 0 if df is None else len(df),
@@ -452,7 +458,9 @@ class DataRepository:
         ]
 
         # 库内现存重复（若建唯一索引会自动清理）
-        if cols:
+        if dup_in_db is not None:
+            result["dup_in_db"] = dup_in_db
+        elif cols:
             result["dup_in_db"] = self.get_duplicate_count(table_name, cols)
 
         if not cols:
@@ -471,11 +479,17 @@ class DataRepository:
         uniq = key_df.drop_duplicates(keep="first")
         result["to_skip"] = len(key_df) - len(uniq)
 
-        # 与库内已有键比对
-        try:
-            existing = self.query(table_name, limit=None)[use_cols]
-        except Exception:
-            existing = pd.DataFrame(columns=use_cols)
+        # 与库内已有键比对（existing_df 由调用方预加载传入时跳过全表查询）
+        if existing_df is not None:
+            try:
+                existing = existing_df[use_cols]
+            except Exception:
+                existing = pd.DataFrame(columns=use_cols)
+        else:
+            try:
+                existing = self.query(table_name, limit=None)[use_cols]
+            except Exception:
+                existing = pd.DataFrame(columns=use_cols)
         existing_keys = set(
             existing.astype(str).apply(tuple, axis=1)) if not existing.empty else set()
         file_keys = set(uniq.apply(tuple, axis=1))
@@ -488,14 +502,30 @@ class DataRepository:
     # 通用查询
     # ------------------------------------------------------------------
 
+    def _find_date_column(self, table_name: str) -> str | None:
+        """从表中找第一个日期类列（无则返回 None）"""
+        existing = self.get_all_existing_columns(table_name)
+        lower_keywords = tuple(k.lower() for k in self.DATE_COLUMN_KEYWORDS)
+        for col in existing:
+            cl = col.lower()
+            if cl in ("date", "时间", "日期", "月份", "datetime") or \
+                    any(kw in cl for kw in lower_keywords):
+                return col
+        return None
+
     def query(
         self,
         table_name: str,
         filters: dict | None = None,
         order_by: str | None = None,
         limit: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
     ) -> pd.DataFrame:
-        """查询数据表返回 DataFrame（表不存在返回空 DataFrame）"""
+        """查询数据表返回 DataFrame（表不存在返回空 DataFrame）
+
+        date_from/date_to : 可选，按自动探测的日期列做区间过滤（ISO 字符串）
+        """
         if not self.table_exists(table_name):
             return pd.DataFrame()
         safe_t = self._quote_table(table_name)
@@ -508,6 +538,18 @@ class DataRepository:
                 where_clauses.append(f'"{safe_k}" = :_{safe_k}')
                 params[f"_{safe_k}"] = value
 
+        # 日期区间过滤（按表内第一个日期类列）
+        if date_from is not None or date_to is not None:
+            date_col = self._find_date_column(table_name)
+            if date_col:
+                safe_dc = date_col.replace("\"", "\"\"")
+                if date_from is not None:
+                    where_clauses.append(f'"{safe_dc}" >= :_d_from')
+                    params["_d_from"] = date_from
+                if date_to is not None:
+                    where_clauses.append(f'"{safe_dc}" <= :_d_to')
+                    params["_d_to"] = date_to
+
         sql = f"SELECT * FROM {safe_t}"
         if where_clauses:
             sql += " WHERE " + " AND ".join(where_clauses)
@@ -518,6 +560,54 @@ class DataRepository:
 
         with self.engine.connect() as conn:
             return pd.read_sql_query(sql, conn, params=params)
+
+    def get_distinct_values(self, table_name: str, column: str, limit: int = 1000) -> list[str]:
+        """返回某列非空去重值列表（供「已有代码」下拉）；表或列不存在返回 []"""
+        if not self.table_exists(table_name):
+            return []
+        safe_t = self._quote_table(table_name)
+        safe_c = column.replace("\"", "\"\"")
+        try:
+            with self.engine.connect() as conn:
+                rows = conn.execute(text(
+                    f"SELECT DISTINCT \"{safe_c}\" FROM {safe_t} "
+                    f"WHERE \"{safe_c}\" IS NOT NULL AND \"{safe_c}\" != '' "
+                    f"ORDER BY \"{safe_c}\" LIMIT {int(limit)}"
+                )).fetchall()
+            return [str(r[0]) for r in rows]
+        except Exception:
+            return []
+
+    def get_max_date(
+        self,
+        table_name: str,
+        code_col: str | None = None,
+        code: str | None = None,
+    ) -> str | None:
+        """按（可选）code 取表中实际最大日期值（ISO 字符串）
+
+        用于多 code 表（fund/stock）的增量起点：比 meta_sync_jobs.last_sync_date
+        （表级）更可靠，即使 last_sync_date 被污染也能从该 code 真实数据之后开始。
+        无日期列或无数据返回 None。
+        """
+        if not self.table_exists(table_name):
+            return None
+        date_col = self._find_date_column(table_name)
+        if not date_col:
+            return None
+        where = f'"{date_col.replace(chr(34), chr(34)*2)}" IS NOT NULL AND "{date_col.replace(chr(34), chr(34)*2)}" != ""'
+        params: dict[str, str] = {}
+        if code and code_col:
+            safe_c = code_col.replace("\"", "\"\"")
+            where += f' AND "{safe_c}" = :code'
+            params["code"] = code
+        sql = f'SELECT MAX("{date_col.replace(chr(34), chr(34)*2)}") FROM {self._quote_table(table_name)} WHERE {where}'
+        try:
+            with self.engine.connect() as conn:
+                val = conn.execute(text(sql), params).scalar()
+            return str(val) if val else None
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # 缓存
