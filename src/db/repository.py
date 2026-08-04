@@ -155,13 +155,25 @@ class DataRepository:
     def set_indicator(self, indicator_key: str, table_name: str) -> dict | None:
         """手动选择某指标的获信源表 → 解析列映射并 UPSERT 到 meta_indicator
 
+        - 表已同步：解析日期/数值列后存储。
+        - 目录中声明但尚未同步的表：允许「预配置」获信源（date/value 列留空，
+          首次同步后 get_indicator 动态解析）。这使 FRED 等新表未同步时也能先选。
+        - 无效表（目录里都没有）→ None。
+
         Returns:
-            新映射 dict；表不存在/无法解析日期列 → None
+            新映射 dict；表既不存在也不在目录 → None
         """
-        date_col = self._find_date_column(table_name)
-        value_col = self._resolve_value_column(table_name)
-        if not date_col or not value_col or not self.table_exists(table_name):
-            return None
+        date_col, value_col = "", ""
+        if self.table_exists(table_name):
+            date_col = self._find_date_column(table_name) or ""
+            value_col = self._resolve_value_column(table_name) or ""
+            if not date_col or not value_col:
+                return None
+        else:
+            # 未同步但目录中声明过 → 允许预配置（列留空，同步后动态解析）
+            known = {s.get("table_name") for s in self.get_all_enabled_sources()}
+            if table_name not in known:
+                return None
 
         # 首选源的 api_source（从目录取）
         source_api = ""
@@ -241,6 +253,7 @@ class DataRepository:
         """统一查询指标：读 meta_indicator 获信源表 → 返回 {date, value} 两列
 
         无映射 / 首选表未同步 / 表不存在 → 空 DataFrame（两列）。
+        预配置的获信源（date/value 列未存，表尚未同步）在表存在后动态解析列。
         """
         empty = pd.DataFrame(columns=["date", "value"])
         mapping = None
@@ -252,19 +265,25 @@ class DataRepository:
         if mapping is None:
             return empty
 
+        # 预配置（列未存）→ 首次查询时动态解析
+        date_col = mapping.date_column or self._find_date_column(mapping.preferred_table)
+        value_col = mapping.value_column or self._resolve_value_column(mapping.preferred_table)
+        if not date_col or not value_col:
+            return empty
+
         df = self.query(
             mapping.preferred_table,
             limit=limit,
             date_from=start_date,
             date_to=end_date,
         )
-        if df.empty or mapping.date_column not in df.columns \
-                or mapping.value_column not in df.columns:
+        if df.empty or date_col not in df.columns \
+                or value_col not in df.columns:
             return empty
 
         out = pd.DataFrame({
-            "date": df[mapping.date_column],
-            "value": df[mapping.value_column],
+            "date": df[date_col],
+            "value": df[value_col],
         })
         return out.sort_values("date", ascending=False).reset_index(drop=True)
 

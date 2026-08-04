@@ -37,6 +37,7 @@ from src.gui.dialogs.settings_dialog import SettingsDialog
 from src.gui.dialogs.schedule_dialog import ScheduleDialog
 from src.gui.dialogs.export_dialog import ExportDialog
 from src.gui.dialogs.health_dialog import HealthDialog
+from src.gui.dialogs.indicator_manager_dialog import IndicatorManagerDialog
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +418,10 @@ class MainWindow(QMainWindow):
         self.health_check_action.triggered.connect(self._show_health_check)
         data_menu.addAction(self.health_check_action)
 
+        self.indicator_mgr_action = QAction("📊 指标管理中心", self)
+        self.indicator_mgr_action.triggered.connect(self._show_indicator_manager)
+        data_menu.addAction(self.indicator_mgr_action)
+
         data_menu.addSeparator()
 
         self.scrape_all_action = QAction("🕷 抓取所有数据源", self)
@@ -508,6 +513,7 @@ class MainWindow(QMainWindow):
         self.param_panel.export_excel_action.triggered.connect(self._open_export_dialog)
         self.param_panel.export_pdf_action.triggered.connect(self._open_export_dialog)
         self.tree_widget.scheduleToggled.connect(self.on_schedule_toggle)
+        self.tree_widget.trustRequested.connect(self._on_tree_trust_requested)
 
         self.sync_engine.sync_completed.connect(self.on_sync_completed)
         self.sync_engine.sync_error.connect(self.on_sync_error)
@@ -1575,6 +1581,11 @@ class MainWindow(QMainWindow):
         dialog = HealthDialog(self.repo, self.registry, self.scheduler, self)
         dialog.exec()
 
+    def _show_indicator_manager(self) -> None:
+        """打开指标管理中心对话框（集中查看/切换获信源）"""
+        dialog = IndicatorManagerDialog(self.repo, self.registry, self)
+        dialog.exec()
+
     def _trusted_indicator_df(self, source) -> "pd.DataFrame | None":
         """若当前源有 indicator 且已设获信源 → 返回获信 {date,value}；否则 None"""
         if not source:
@@ -1590,20 +1601,16 @@ class MainWindow(QMainWindow):
             return None
         return df if not df.empty else None
 
-    def _on_trust_clicked(self) -> None:
-        """把当前数据源设为该指标的获信（首选）来源"""
-        source_key = self._current_source_key
-        if not source_key:
-            return
-        source = self.registry.get_source(source_key)
+    def _set_as_trusted_source(self, source) -> bool:
+        """把指定数据源设为该指标的获信（首选）来源；成功返回 True"""
         if not source:
-            return
+            return False
         indicator_key = source.get("indicator", "")
         table_name = source.get("table_name", "")
         if not indicator_key or not table_name:
             QMessageBox.information(
-                self, "提示", "当前数据源未定义 indicator，无法设为获信源")
-            return
+                self, "提示", "该数据源未定义 indicator，无法设为获信源")
+            return False
 
         record = self.repo.set_indicator(indicator_key, table_name)
         if record is None:
@@ -1611,7 +1618,7 @@ class MainWindow(QMainWindow):
                 self, "设置失败",
                 f"无法把表 [{table_name}] 设为获信源：\n"
                 "未能解析日期列/数值列，或表不存在。")
-            return
+            return False
 
         # 刷新指标获信区 + 日志
         mapping = self.repo.get_indicator_map(indicator_key)
@@ -1622,6 +1629,24 @@ class MainWindow(QMainWindow):
             self, "已设为获信源",
             f"指标 {indicator_key}\n获信源: {table_name}\n\n"
             "之后 AI 分析 / 导出 / /macro/cpi 将统一读取获信源数据。")
+        return True
+
+    def _on_trust_clicked(self) -> None:
+        """把当前数据源设为该指标的获信（首选）来源"""
+        source_key = self._current_source_key
+        if not source_key:
+            return
+        source = self.registry.get_source(source_key)
+        if source:
+            self._set_as_trusted_source(source)
+
+    def _on_tree_trust_requested(self, source_key: str) -> None:
+        """树右键「设为获信源」→ 设为获信（不改变当前选中）"""
+        if not source_key:
+            return
+        source = self.registry.get_source(source_key)
+        if source:
+            self._set_as_trusted_source(source)
 
     def _show_ai_analyze(self) -> None:
         """打开 AI 智能分析对话框（分析当前表格数据）"""

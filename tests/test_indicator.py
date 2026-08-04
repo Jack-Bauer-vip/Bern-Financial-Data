@@ -96,6 +96,20 @@ def test_set_indicator_invalid_table(repo):
     assert repo.set_indicator("us.x", "no_such_table") is None
 
 
+def test_set_indicator_preconfig_unsynced_declared(repo):
+    """目录中声明但未同步的表 → 允许预配置（列留空），get_indicator 优雅返回空"""
+    # macro_fred_unemployment 在目录中声明但临时库未建表
+    rec = repo.set_indicator("us.unemployment", "macro_fred_unemployment")
+    assert rec is not None
+    assert rec["preferred_table"] == "macro_fred_unemployment"
+    assert rec["date_column"] == ""
+    assert rec["value_column"] == ""
+    # 未同步 → get_indicator 空（不崩）
+    df = repo.get_indicator("us.unemployment")
+    assert df.empty
+    assert list(df.columns) == ["date", "value"]
+
+
 def test_meta_indicator_excluded_from_data_tables(repo):
     """meta_indicator 是元数据表，collect_tables 不应暴露为数据表"""
     from src.importer.matcher import collect_tables
@@ -114,6 +128,24 @@ def test_indicator_candidates(repo):
     assert tables == {"macro_usa_unemployment_rate", "macro_fred_unemployment"}
     # 无 indicator 键的指标 → 空
     assert repo.indicator_candidates("us.ism") == []
+
+
+def test_catalog_fred_rollout_pairs():
+    """FRED 铺开：20 个指标 akshare+FRED 成对，FRED 源共 20 个"""
+    from src.core.fetcher_registry import FetcherRegistry
+    from src.utils.config import ConfigManager
+    from collections import defaultdict
+    reg = FetcherRegistry(ConfigManager())
+    groups = defaultdict(list)
+    for s in reg.get_all_sources():
+        if s.get("indicator"):
+            groups[s["indicator"]].append(s["api_source"])
+    # 20 个指标全部 akshare+fred 成对
+    assert len(groups) == 20
+    assert all(len(v) == 2 and set(v) == {"akshare", "fred"} for v in groups.values())
+    # FRED 源总数 20（5 原 + 15 新）
+    fred_count = sum(1 for s in reg.get_all_sources() if s.get("api_source") == "fred")
+    assert fred_count == 20
 
 
 # ---------------------------------------------------------------------------

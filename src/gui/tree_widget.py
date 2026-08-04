@@ -21,6 +21,7 @@ class DataTreeWidget(QTreeWidget):
 
     itemSelected = Signal(str)  # 发射 source_key
     scheduleToggled = Signal(str, bool)  # category_name, enabled
+    trustRequested = Signal(str)  # source_key —— 右键「设为获信源」
 
     def __init__(self, registry: FetcherRegistry, parent=None):
         super().__init__(parent)
@@ -177,8 +178,22 @@ class DataTreeWidget(QTreeWidget):
         info_action = menu.addAction("📋 查看调度信息")
         info_action.setData(None)
 
+        # 叶节点且声明了 indicator → 提供「设为获信源」快捷入口
+        source_key = item.data(0, ROLE_SOURCE_KEY)
+        trust_action = None
+        if source_key:
+            src = self.registry.get_source(source_key)
+            if src and src.get("indicator"):
+                menu.addSeparator()
+                trust_action = menu.addAction("⭐ 设为获信源")
+                trust_action.setData("__trust__")
+
         chosen = menu.exec(self.mapToGlobal(pos))
         if chosen is None:
+            return
+
+        if trust_action is not None and chosen is trust_action:
+            self.trustRequested.emit(source_key)
             return
 
         new_state = chosen.data()

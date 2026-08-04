@@ -21,6 +21,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_core_cpi_monthly
       table_name: macro_usa_core_cpi_monthly
+      indicator: us.core_cpi
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国GDP
@@ -66,6 +67,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_retail_sales
       table_name: macro_usa_retail_sales
+      indicator: us.retail_sales
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国初请失业金
@@ -73,6 +75,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_initial_jobless
       table_name: macro_usa_initial_jobless
+      indicator: us.initial_jobless
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国消费者信心
@@ -87,6 +90,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_ppi
       table_name: macro_usa_ppi
+      indicator: us.ppi
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国核心PCE
@@ -94,6 +98,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_core_pce_price
       table_name: macro_usa_core_pce_price
+      indicator: us.core_pce
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国工厂订单
@@ -101,6 +106,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_factory_orders
       table_name: macro_usa_factory_orders
+      indicator: us.factory_orders
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国耐用品订单
@@ -108,6 +114,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_durable_goods_orders
       table_name: macro_usa_durable_goods_orders
+      indicator: us.durable_goods
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国贸易帐
@@ -115,6 +122,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_trade_balance
       table_name: macro_usa_trade_balance
+      indicator: us.trade_balance
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国工业产出
@@ -122,6 +130,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_industrial_production
       table_name: macro_usa_industrial_production
+      indicator: us.industrial_production
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国新屋开工
@@ -129,6 +138,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_house_starts
       table_name: macro_usa_house_starts
+      indicator: us.house_starts
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国成屋销售
@@ -136,6 +146,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_exist_home_sales
       table_name: macro_usa_exist_home_sales
+      indicator: us.exist_home_sales
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国个人支出
@@ -143,6 +154,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_personal_spending
       table_name: macro_usa_personal_spending
+      indicator: us.personal_spending
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国密歇根消费者信心
@@ -150,6 +162,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_michigan_consumer_sentiment
       table_name: macro_usa_michigan_consumer_sentiment
+      indicator: us.michigan_sentiment
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国NFIB小企业信心
@@ -164,6 +177,7 @@ categories:
       api_source: akshare
       api_function: bond_gb_us_sina
       table_name: macro_usa_bond_yield_30y
+      indicator: us.bond_yield_30y
       has_incremental: true
       incremental_field: date
       params_template:
@@ -179,6 +193,7 @@ categories:
       api_source: akshare
       api_function: bond_gb_us_sina
       table_name: macro_usa_bond_yield_2y
+      indicator: us.bond_yield_2y
       has_incremental: true
       incremental_field: date
       params_template:
@@ -246,6 +261,126 @@ categories:
         api_function: GDPC1
         table_name: macro_fred_gdp
         indicator: us.gdp
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国核心CPI(FRED)
+        source_key: macro.us.fred.core_cpi
+        api_source: fred
+        api_function: CPILFESL
+        table_name: macro_fred_core_cpi
+        indicator: us.core_cpi
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国零售销售(FRED)
+        source_key: macro.us.fred.retail_sales
+        api_source: fred
+        api_function: RSAFS
+        table_name: macro_fred_retail_sales
+        indicator: us.retail_sales
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国初请失业金(FRED)
+        source_key: macro.us.fred.initial_jobless
+        api_source: fred
+        api_function: ICSA
+        table_name: macro_fred_initial_jobless
+        indicator: us.initial_jobless
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国PPI(FRED)
+        source_key: macro.us.fred.ppi
+        api_source: fred
+        api_function: PPIFID
+        table_name: macro_fred_ppi
+        indicator: us.ppi
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国核心PCE(FRED)
+        source_key: macro.us.fred.core_pce
+        api_source: fred
+        api_function: PCEPILFE
+        table_name: macro_fred_core_pce
+        indicator: us.core_pce
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国工厂订单(FRED)
+        source_key: macro.us.fred.factory_orders
+        api_source: fred
+        api_function: AMTMNO
+        table_name: macro_fred_factory_orders
+        indicator: us.factory_orders
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国耐用品订单(FRED)
+        source_key: macro.us.fred.durable_goods
+        api_source: fred
+        api_function: DGORDER
+        table_name: macro_fred_durable_goods
+        indicator: us.durable_goods
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国贸易帐(FRED)
+        source_key: macro.us.fred.trade_balance
+        api_source: fred
+        api_function: BOPGSTB
+        table_name: macro_fred_trade_balance
+        indicator: us.trade_balance
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国工业产出(FRED)
+        source_key: macro.us.fred.industrial_production
+        api_source: fred
+        api_function: INDPRO
+        table_name: macro_fred_industrial_production
+        indicator: us.industrial_production
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国新屋开工(FRED)
+        source_key: macro.us.fred.house_starts
+        api_source: fred
+        api_function: HOUST
+        table_name: macro_fred_house_starts
+        indicator: us.house_starts
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国成屋销售(FRED)
+        source_key: macro.us.fred.exist_home_sales
+        api_source: fred
+        api_function: EXHOSLUSM495S
+        table_name: macro_fred_exist_home_sales
+        indicator: us.exist_home_sales
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国个人支出(FRED)
+        source_key: macro.us.fred.personal_spending
+        api_source: fred
+        api_function: PCE
+        table_name: macro_fred_personal_spending
+        indicator: us.personal_spending
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国密歇根消费者信心(FRED)
+        source_key: macro.us.fred.michigan_sentiment
+        api_source: fred
+        api_function: UMCSENT
+        table_name: macro_fred_michigan_sentiment
+        indicator: us.michigan_sentiment
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国30年期国债收益率(FRED)
+        source_key: macro.us.fred.bond_yield_30y
+        api_source: fred
+        api_function: DGS30
+        table_name: macro_fred_bond_yield_30y
+        indicator: us.bond_yield_30y
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国2年期国债收益率(FRED)
+        source_key: macro.us.fred.bond_yield_2y
+        api_source: fred
+        api_function: DGS2
+        table_name: macro_fred_bond_yield_2y
+        indicator: us.bond_yield_2y
         params: {}
         schedule_cron: 0 22 * * 1-5
   - name: 🇪🇺 欧元区经济
