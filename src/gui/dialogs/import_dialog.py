@@ -63,13 +63,14 @@ class BatchIdentifyWorker(QObject):
     batch_done = Signal()
 
     def __init__(self, repo, schema_mgr, ai_client, paths: list[str],
-                 suggested_table: str = ""):
+                 suggested_table: str = "", template_store=None):
         super().__init__()
         self.repo = repo
         self.schema_mgr = schema_mgr
         self.ai_client = ai_client
         self.paths = paths
         self.suggested_table = suggested_table
+        self.template_store = template_store
         # 识别阶段数据库不会变化 → 同一目标表只全表加载/统计一次
         self._table_snapshots: dict[str, pd.DataFrame] = {}
         self._dup_counts: dict[tuple, int] = {}
@@ -83,6 +84,12 @@ class BatchIdentifyWorker(QObject):
         from src.core.unique_key import infer_unique_cols_by_table
 
         tables_meta = collect_tables(self.repo)
+
+        # 表头模板索引（统一表头批量导入时确定性路由，跳过规则评分与 AI）
+        templates = None
+        if self.template_store is not None:
+            from src.importer.header_template import build_index
+            templates = build_index(self.template_store.config, self.repo, tables_meta)
 
         for path in self.paths:
             item = FileItem(path=path)
@@ -111,6 +118,7 @@ class BatchIdentifyWorker(QObject):
                         tables_meta=tables_meta,
                         ai_client=self.ai_client,
                         filename=os.path.basename(path),
+                        templates=templates,
                     )
                     item.table_name = res.table_name if res else ""
                     item.confidence = res.confidence if res else 0.0
@@ -184,7 +192,15 @@ class ImportDialog(QDialog):
         # AI 客户端（不可用自动为 None → 全规则）
         from src.utils.config import ConfigManager
         from src.importer.ai_client import AiClient
-        self.ai_client = AiClient(ConfigManager()) if AiClient(ConfigManager()).is_available() else None
+        self.config = ConfigManager()
+        self.ai_client = AiClient(self.config) if AiClient(self.config).is_available() else None
+
+        # 表头记忆模板（同意表头 → 确定性路由，减少规则评分与 AI 依赖）
+        from src.importer.header_template import HeaderTemplateStore
+        self._template_store = (
+            HeaderTemplateStore(self.config)
+            if self.config.get("import.learn_templates", True) else None
+        )
 
         from src.importer.matcher import collect_tables
         self._tables_meta = collect_tables(repo)
@@ -207,6 +223,10 @@ class ImportDialog(QDialog):
         self._paths: list[str] = []
         self._thread: QThread | None = None
         self._worker: BatchIdentifyWorker | None = None
+        # 识别阶段按目标表缓存的全表快照 / 重复计数（识别完成后供手动改表复用，
+        # 避免再次对大数据表全表加载 → 主线程卡死）
+        self._table_snapshots: dict = {}
+        self._dup_counts: dict = {}
 
         self.setWindowTitle("导入数据")
         self.setMinimumSize(760, 560)
@@ -289,12 +309,16 @@ class ImportDialog(QDialog):
 
         # ---- 按钮 ----
         btn_layout = QHBoxLayout()
+        clear_btn = QPushButton("清除表头记忆")
+        clear_btn.setToolTip("删除学习到的「表头→目标表」绑定，下次导入需重新识别")
+        clear_btn.clicked.connect(self._clear_templates)
+        btn_layout.addWidget(clear_btn)
+        btn_layout.addStretch()
         self.import_btn = QPushButton("导入")
         self.import_btn.setEnabled(False)
         self.import_btn.clicked.connect(self._do_import)
         cancel_btn = QPushButton("取消")
         cancel_btn.clicked.connect(self.reject)
-        btn_layout.addStretch()
         btn_layout.addWidget(cancel_btn)
         btn_layout.addWidget(self.import_btn)
         layout.addLayout(btn_layout)
@@ -338,7 +362,8 @@ class ImportDialog(QDialog):
         # ★ 关键修复：worker 存为 self._worker 防止被 GC，
         #   否则 started.connect(worker.run) 槽断开 → batch_done 永不触发
         self._worker = BatchIdentifyWorker(
-            self.repo, None, self.ai_client, new_paths, self.suggested_table)
+            self.repo, None, self.ai_client, new_paths, self.suggested_table,
+            template_store=self._template_store)
         worker = self._worker
         worker.moveToThread(self._thread)
 
@@ -347,6 +372,9 @@ class ImportDialog(QDialog):
         self._thread.started.connect(worker.run)
         self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
+
+        # ★ 识别进行中禁用目标表下拉：防止误触触发主线程全表分析 →「无响应」
+        self._set_combos_enabled(False)
 
     # ------------------------------------------------------------------
     # 拖拽上传
@@ -427,11 +455,29 @@ class ImportDialog(QDialog):
             + (f"，{len(errors)} 个失败" if errors else ""))
         if ready:
             self.import_btn.setEnabled(True)
+        # ★ 提升 worker 已加载的表快照/重复计数，供识别后手动改表复用
+        #   （避免对大数据表再次全表加载 → 主线程卡死）。worker.run 已结束，
+        #   主线程此刻读其属性无并发风险。
+        if self._worker is not None:
+            self._table_snapshots = getattr(self._worker, "_table_snapshots", {}) or {}
+            self._dup_counts = getattr(self._worker, "_dup_counts", {}) or {}
+        # 识别完成 → 重新启用目标表下拉
+        self._set_combos_enabled(True)
         # 清理线程与 worker 引用
         if self._thread:
             self._thread.quit()
             self._thread = None
         self._worker = None
+
+    def _set_combos_enabled(self, enabled: bool) -> None:
+        """统一启用/禁用所有目标表下拉
+
+        识别进行中禁用 → 用户误触不会触发主线程全表分析（避免「无响应」）。
+        """
+        for row in range(self.file_table.rowCount()):
+            combo = self.file_table.cellWidget(row, 1)
+            if isinstance(combo, QComboBox):
+                combo.setEnabled(enabled)
 
     def _update_row(self, row: int) -> None:
         """刷新某行的识别结果"""
@@ -450,7 +496,7 @@ class ImportDialog(QDialog):
                 combo.blockSignals(False)
 
         conf_text = f"{item.confidence:.0%}" if item.confidence else ""
-        method_text = {"rules": "规则", "ai": "AI"}.get(item.method, "")
+        method_text = {"rules": "规则", "ai": "AI", "template": "模板"}.get(item.method, "")
         self.file_table.setItem(row, 2, QTableWidgetItem(
             f"{conf_text} {method_text}" if conf_text else ""))
 
@@ -466,7 +512,13 @@ class ImportDialog(QDialog):
         self.file_table.setItem(row, 5, QTableWidgetItem(status))
 
     def _on_table_changed(self, path: str, table_name: str) -> None:
-        """用户手动改目标表 → 同步重算列映射 + 影响估算（不调 AI，快）"""
+        """用户手动改目标表 → 同步重算列映射 + 影响估算（不调 AI）
+
+        识别进行中忽略下拉变更（下拉已禁用，此为兜底）——否则主线程
+        全表分析会把界面卡成「无响应」。
+        """
+        if self._thread is not None:
+            return
         item = self._items.get(path)
         if not item or not table_name:
             return
@@ -486,10 +538,28 @@ class ImportDialog(QDialog):
         item.plan = map_columns(list(item.df.columns), table_cols)  # 纯规则
         item.unique_key = infer_unique_cols_by_table(table_name)
         mapped_df = item.plan.apply(item.df)
+        # ★ 复用识别阶段已加载的表快照，避免再次全表加载（大数据表会卡主线程）
+        existing_df = self._table_snapshots.get(table_name)
+        dup_in_db = None
+        if existing_df is not None:
+            try:
+                cols = self.repo.resolve_date_columns(
+                    table_name, item.unique_key or [])
+                dup_in_db = self._dup_counts.get((table_name, tuple(cols)))
+            except Exception:
+                dup_in_db = None
         item.analysis = self.repo.analyze_import(
-            table_name, mapped_df, item.unique_key or None)
+            table_name, mapped_df, item.unique_key or None,
+            existing_df=existing_df, dup_in_db=dup_in_db)
         item.status = "就绪"
         item.low_confidence = False
+
+        # ★ 用户手动指定目标表 → 记忆该表头 → 目标表，下次同表头直接命中模板
+        if self._template_store is not None and item.df is not None:
+            self._template_store.learn(
+                list(item.df.columns), table_name,
+                unique_key=item.unique_key, mapping=item.plan.mapping,
+                source="user")
 
         row = self._paths.index(path)
         self._update_row(row)
@@ -526,6 +596,20 @@ class ImportDialog(QDialog):
         if len(df) > MAX_ROWS:
             self.impact_label.setText(f"预览前 {MAX_ROWS} 行（共 {len(df)} 行）")
 
+    def _clear_templates(self) -> None:
+        """清除学习到的表头模板（手动纠正错误记忆的出口）"""
+        if self._template_store is None:
+            return
+        ret = QMessageBox.question(
+            self, "清除表头记忆",
+            "将删除所有学习到的「表头→目标表」绑定。\n"
+            "之后同一表头需重新识别（可手动选择目标表后自动重新记忆）。\n是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret == QMessageBox.StandardButton.Yes:
+            self._template_store.clear()
+
     def _update_impact_label(self, path: str) -> None:
         """更新影响估算 + 新字段提示"""
         item = self._items.get(path)
@@ -557,21 +641,22 @@ class ImportDialog(QDialog):
             QMessageBox.warning(self, "提示", "没有可导入的文件")
             return
 
-        # 1. 汇总确认
-        lines = [f"将导入 {len(ready)} 个文件："]
+        # 1. 汇总确认 — 用可滚动确认框，文件再多也能滚着看完、确定键始终可点
+        from src.gui.dialogs.confirm_list_dialog import ConfirmListDialog
+        lines = []
         for it in ready:
             a = it.analysis or {}
             new_note = f"（+{len(it.plan.new_columns)}新字段）" if it.plan.new_columns else ""
             lines.append(
                 f"  • {os.path.basename(it.path)} → {it.table_name}"
                 f"  新增{a.get('to_insert', 0)}/更新{a.get('to_update', 0)}{new_note}")
-        lines.append("\n是否继续？")
-        ret = QMessageBox.question(
-            self, "确认导入", "\n".join(lines),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        dlg = ConfirmListDialog(
+            self, "确认导入",
+            summary=f"将导入 {len(ready)} 个文件，是否继续？",
+            lines=lines,
+            confirm_text="导入",
         )
-        if ret != QMessageBox.StandardButton.Yes:
+        if dlg.exec() != QDialog.Accepted:
             return
 
         # 2. 新字段逐个确认
@@ -601,6 +686,8 @@ class ImportDialog(QDialog):
 
         total_processed = 0
         ok_files = 0
+        # 本批按表头签名去重，只记忆一次（AI 识别被确认 → 下次同表头不再调 AI）
+        learned_sigs: set = set()
         for idx, it in enumerate(ready):
             try:
                 df = it.plan.apply(it.df)
@@ -610,6 +697,17 @@ class ImportDialog(QDialog):
                     unique_columns=it.unique_key or None, batch_size=500)
                 total_processed += added
                 ok_files += 1
+                if (self._template_store is not None
+                        and it.method == "ai"
+                        and it.df is not None):
+                    from src.importer.header_template import header_name_signature
+                    sig = header_name_signature(it.df.columns)
+                    if sig not in learned_sigs:
+                        learned_sigs.add(sig)
+                        self._template_store.learn(
+                            list(it.df.columns), it.table_name,
+                            unique_key=it.unique_key, mapping=it.plan.mapping,
+                            source="ai")
             except Exception as exc:
                 QMessageBox.critical(
                     self, "导入失败",

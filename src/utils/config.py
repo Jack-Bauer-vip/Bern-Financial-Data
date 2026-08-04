@@ -67,6 +67,29 @@ class ConfigManager:
         return self.get_env("TUSHARE_TOKEN", "")
 
     @property
+    def tushare_api_url(self) -> str:
+        """tushare API 地址（第三方代理或官方）。
+
+        TUSHARE_API_URL 环境变量优先；否则用 default.yaml 的 tushare.api_url。
+        """
+        return self.get_env("TUSHARE_API_URL") or self.get(
+            "tushare.api_url", "https://ts.gyzcloud.top/api")
+
+    @property
+    def fred_api_key(self) -> str:
+        """FRED API key（圣路易斯联储官方美国数据）"""
+        return self.get_env("FRED_API_KEY", "")
+
+    @property
+    def fred_api_url(self) -> str:
+        """FRED API 地址。
+
+        FRED_API_URL 环境变量优先；否则用 default.yaml 的 fred.api_url。
+        """
+        return self.get_env("FRED_API_URL") or self.get(
+            "fred.api_url", "https://api.stlouisfed.org")
+
+    @property
     def db_path(self) -> Path:
         path = self.get_env("DB_PATH") or self.get("app.db_path", "data/berndata.db")
         return self.root_dir / path

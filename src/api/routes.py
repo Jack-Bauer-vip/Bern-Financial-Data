@@ -260,6 +260,18 @@ async def query_cpi(
     all_data = []
     for tbl in tables:
         try:
+            # 指标归一层：该表对应指标已设获信源 → 用获信数据（统一接口），
+            #   否则退回原始表。如 us.cpi 获信源设为 FRED → 这里返回 FRED 数据
+            ind = _indicator_for_table(tbl)
+            if ind:
+                mapping = repo.get_indicator_map(ind)
+                if mapping:
+                    df = repo.get_indicator(ind, limit=limit)
+                    if not df.empty:
+                        df = _filter_by_date_range(df, start_date, end_date)
+                        if not df.empty:
+                            all_data.append(df)
+                    continue
             df = repo.query(tbl, limit=limit)
             if df.empty:
                 continue
@@ -286,6 +298,23 @@ async def query_cpi(
     data = combined.head(limit).to_dict(orient="records")
 
     return DataResponse(data=data, total=total)
+
+
+def _indicator_for_table(table_name: str) -> str | None:
+    """查数据目录中该表对应的 indicator 键（无则 None）
+
+    用于让 /macro/cpi 等聚合端点走指标归一层：某表对应指标已设获信源时，
+    用获信数据替代原始表。
+    """
+    try:
+        from src.core.fetcher_registry import FetcherRegistry
+        from src.utils.config import ConfigManager
+        for s in FetcherRegistry(ConfigManager()).get_all_sources():
+            if s.get("table_name") == table_name and s.get("indicator"):
+                return str(s["indicator"])
+    except Exception:
+        return None
+    return None
 
 
 def _macro_table_names() -> set[str]:
@@ -352,6 +381,63 @@ async def query_macro_generic(
         data=df.to_dict(orient="records") if not df.empty else [],
         total=len(df),
     )
+
+
+# ---------------------------------------------------------------------------
+# 指标归一层（indicator）— 统一指标查询，隐藏跨源重复
+# ---------------------------------------------------------------------------
+
+
+@router.get("/indicator", tags=["指标"])
+async def list_indicators(repo=Depends(get_repo)):
+    """列出全部指标映射（indicator → 获信源表 + 列映射）"""
+    return DataResponse(data=repo.list_indicators(), total=len(repo.list_indicators()))
+
+
+@router.get("/indicator/{indicator_key}", tags=["指标"])
+async def get_indicator(
+    indicator_key: str,
+    start_date: str = Query(None, pattern=r"^\d{8}$"),
+    end_date: str = Query(None, pattern=r"^\d{8}$"),
+    limit: int = Query(5000, le=100000),
+    repo=Depends(get_repo),
+):
+    """统一查询指标（按获信源表），返回 {date, value}
+
+    指标键如 us.unemployment、us.cpi。无获信映射 → 空。
+    日期区间用 _filter_by_date_range 处理（start/end 为 YYYYMMDD，与
+    /macro/{table_name} 一致；get_indicator 先返回全量再在此过滤）。
+    """
+    df = repo.get_indicator(indicator_key, limit=limit)
+    if not df.empty:
+        df = _filter_by_date_range(df, start_date, end_date)
+    return DataResponse(
+        data=df.to_dict(orient="records") if not df.empty else [],
+        total=len(df),
+        source=f"indicator:{indicator_key}",
+    )
+
+
+@router.put("/indicator/{indicator_key}", tags=["指标"])
+async def set_indicator(
+    indicator_key: str,
+    body: dict = {},
+    repo=Depends(get_repo),
+):
+    """手动设置某指标的获信源表
+
+    body: {"table": "macro_fred_unemployment"}
+    """
+    table = (body or {}).get("table")
+    if not table:
+        raise HTTPException(status_code=400, detail="缺少 table 字段")
+    record = repo.set_indicator(indicator_key, table)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"表 {table} 不存在或无法解析日期/数值列",
+        )
+    return DataResponse(data=[record], total=1)
 
 
 # ---------------------------------------------------------------------------

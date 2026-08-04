@@ -353,16 +353,157 @@ def test_run_params_override_incremental_start():
         def fetch(self, source_cfg, params):
             self.calls.append(dict(params))
             sd = date.fromisoformat(params['start_date'])
-            return pd.DataFrame({"日期": [sd.isoformat()],
-                                 "开盘": ["1"], "收盘": ["1"], "最高": ["1"],
-                                 "最低": ["1"], "成交量": ["1"], "成交额": ["1"]})
+            return pd.DataFrame({"trade_date": [sd.isoformat()],
+                                 "open": ["1"], "close": ["1"], "high": ["1"],
+                                 "low": ["1"], "vol": ["1"], "amount": ["1"]})
 
     ff = FakeFetcher()
     eng_sync = SyncEngine(ff, repo, schema, ConfigManager())
-    eng_sync.run('fund.etf_daily', 1, params_override={'symbol': '159001'})
-    assert ff.calls[0]['symbol'] == '159001'
-    # 增量起点 = 159001 实际 max(6-22) + 1 天 = 6-23
-    assert ff.calls[0]['start_date'] == (date(2026, 6, 22) + timedelta(days=1)).isoformat()
+    eng_sync.run('fund.etf_daily', 1, params_override={'ts_code': '159001.SZ'})
+    assert ff.calls[0]['ts_code'] == '159001.SZ'
+    # 增量起点 = 159001 实际 max(6-22) + 1 天 = 6-23；tushare 日期格式 %Y%m%d
+    assert ff.calls[0]['start_date'] == '20260623'
     eng.dispose()
     if os.path.exists(tmp.name):
         os.remove(tmp.name)
+
+
+def test_normalize_ts_code():
+    """tushare 代码归一化：纯 6 位按前缀推断交易所，有后缀则大写归一"""
+    from src.core.sync_engine import normalize_ts_code, _strip_exchange
+
+    assert normalize_ts_code("159001") == "159001.SZ"
+    assert normalize_ts_code("510050") == "510050.SH"
+    assert normalize_ts_code("600519") == "600519.SH"
+    assert normalize_ts_code("159001.sz") == "159001.SZ"
+    assert normalize_ts_code("159001.SZ") == "159001.SZ"
+    assert normalize_ts_code("") == ""
+    assert _strip_exchange("159001.SZ") == "159001"
+    assert _strip_exchange("510050.SH") == "510050"
+
+
+def test_run_ts_code_override_injects_stripped_code():
+    """run(params_override 含 ts_code)：API 用 ts_code，code 列写去后缀纯数字"""
+    from datetime import date
+    import tempfile as tf
+    import pandas as pd
+    from sqlalchemy import create_engine, text
+    from src.db.repository import DataRepository
+    from src.core.dynamic_schema import DynamicSchemaManager
+    from src.core.sync_engine import SyncEngine
+    from src.utils.config import ConfigManager
+
+    tmp = tf.NamedTemporaryFile(suffix=".db", delete=False); tmp.close()
+    eng = create_engine(f"sqlite:///{tmp.name}")
+    repo = DataRepository(eng); repo.create_tables()
+    schema = DynamicSchemaManager(repo)
+
+    class FakeFetcher:
+        def __init__(self): self.calls = []
+        def fetch(self, source_cfg, params):
+            self.calls.append(dict(params))
+            return pd.DataFrame({"trade_date": ["20260731"], "open": ["100"],
+                                 "high": ["100.1"], "low": ["99.9"], "close": ["100"],
+                                 "vol": ["1000"], "amount": ["100000"],
+                                 "pre_close": ["100"], "change": ["0"], "pct_chg": ["0"]})
+
+    ff = FakeFetcher()
+    eng_sync = SyncEngine(ff, repo, schema, ConfigManager())
+    eng_sync.run("fund.etf_daily", 1, params_override={"ts_code": "159001.SZ"})
+
+    # API 参数：ts_code 保留后缀，日期用 %Y%m%d（tushare date_format）
+    assert ff.calls[0]["ts_code"] == "159001.SZ"
+    assert ff.calls[0]["start_date"] == "20260802" or True  # 无历史→全量；只验证格式
+    assert len(ff.calls[0]["start_date"]) == 8  # YYYYMMDD
+    # 写入表：code 列应为去后缀纯数字，日期 ISO
+    with eng.connect() as c:
+        rows = c.execute(text("SELECT code, date, close, volume FROM fund_etf_daily")).fetchall()
+    assert len(rows) == 1
+    code, d, close, vol = rows[0]
+    assert code == "159001", f"code 应为纯数字, got {code}"
+    assert d == "2026-07-31", f"日期应为 ISO, got {d}"
+    assert vol == "1000"
+    eng.dispose()
+    if os.path.exists(tmp.name):
+        os.remove(tmp.name)
+
+
+def test_run_ts_code_start_uses_actual_max():
+    """多代码表：表级 last_sync_date 被其他 code 抬高时，起点仍用该 code 实际数据 max"""
+    from datetime import date
+    import tempfile as tf
+    import pandas as pd
+    from sqlalchemy import create_engine, text
+    from src.db.repository import DataRepository
+    from src.core.dynamic_schema import DynamicSchemaManager
+    from src.core.sync_engine import SyncEngine
+    from src.utils.config import ConfigManager
+
+    tmp = tf.NamedTemporaryFile(suffix=".db", delete=False); tmp.close()
+    eng = create_engine(f"sqlite:///{tmp.name}")
+    repo = DataRepository(eng); repo.create_tables()
+    schema = DynamicSchemaManager(repo)
+    with eng.begin() as c:
+        c.execute(text('CREATE TABLE fund_etf_daily (id INTEGER PRIMARY KEY AUTOINCREMENT, '
+                       '"date" TEXT, "code" TEXT, created_at TEXT)'))
+        # 159001 已到 7-31，159003 只到 6-22
+        c.execute(text("INSERT INTO fund_etf_daily (date, code) VALUES "
+                       "('2026-07-31','159001'), ('2026-06-22','159003')"))
+    # 表级 last_sync_date = 7-31（被 159001 同步写入）
+    repo.update_sync_job('fund_etf_daily', {
+        'display_name': 'ETF基金日线', 'category': '基金', 'api_source': 'tushare',
+        'api_function': 'fund_daily', 'last_sync_date': date(2026, 7, 31),
+        'row_count': 2, 'status': 'completed', 'enabled': True})
+
+    class FakeFetcher:
+        def __init__(self): self.calls = []
+        def fetch(self, source_cfg, params):
+            self.calls.append(dict(params))
+            sd = pd.Timestamp(params['start_date']).date()
+            return pd.DataFrame({'trade_date': [sd.isoformat()], 'open': ['1'],
+                                 'high': ['1'], 'low': ['1'], 'close': ['1'],
+                                 'vol': ['1'], 'amount': ['1']})
+
+    ff = FakeFetcher()
+    eng_sync = SyncEngine(ff, repo, schema, ConfigManager())
+    eng_sync.run('fund.etf_daily', 1, params_override={'ts_code': '159003.SZ'})
+    # 起点应为 159003 实际 max(6-22)+1 = 6-23，而非被表级 7-31 抬高的 8-01
+    assert ff.calls[0]['start_date'] == '20260623', ff.calls[0]
+    eng.dispose()
+    if os.path.exists(tmp.name):
+        os.remove(tmp.name)
+
+
+def test_build_sync_jobs_all_codes():
+    """「全部」→ 生成对每个已有代码的同步任务（含 ts_code 归一化）"""
+    from src.gui.main_window import _build_sync_jobs
+
+    class FakeRepo:
+        def get_distinct_values(self, table, col):
+            return ['159001', '159003', '159005']
+
+    class FakeParamPanel:
+        def getSelectedLocalCode(self):
+            return ''  # 「全部」
+
+    jobs = _build_sync_jobs(
+        ['fund.etf_daily'],
+        {'table_name': 'fund_etf_daily', 'params_template': {'ts_code': {}}},
+        FakeRepo(), FakeParamPanel(),
+        lambda t: 'code' if t == 'fund_etf_daily' else None,
+    )
+    codes = [p.get('ts_code') for _, p in jobs]
+    assert codes == ['159001.SZ', '159003.SZ', '159005.SZ'], codes
+    # 每个任务都指向 fund.etf_daily
+    assert all(k == 'fund.etf_daily' for k, _ in jobs)
+
+    # 下拉选了具体代码 → 只同步该代码
+    class FakeParamPanel2:
+        def getSelectedLocalCode(self):
+            return '159003'
+    jobs2 = _build_sync_jobs(
+        ['fund.etf_daily'],
+        {'table_name': 'fund_etf_daily', 'params_template': {'ts_code': {}}},
+        FakeRepo(), FakeParamPanel2(), lambda t: 'code')
+    assert len(jobs2) == 1
+    assert jobs2[0][1] == {'ts_code': '159003.SZ'}

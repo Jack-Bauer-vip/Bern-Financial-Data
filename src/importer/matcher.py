@@ -360,8 +360,9 @@ def match_table(
     threshold: float | None = None,
     tables_meta: list[TableMeta] | None = None,
     filename: str | None = None,
+    templates: dict | None = None,
 ) -> MatchResult:
-    """目标表识别入口：规则优先，AI 兜底，AI 不可用降级回规则
+    """目标表识别入口：表头模板 → 规则优先 → AI 兜底 → 降级回规则
 
     Parameters
     ----------
@@ -369,6 +370,9 @@ def match_table(
         预收集的候选表（避免重复查库）；为空时内部 collect_tables(repo)
     filename : str | None
         文件名（暂用于日志/提示，规则评分可后续扩展文件名加分）
+    templates : dict | None
+        表头模板索引（见 header_template.build_index）。统一表头精确命中时
+        直接确定目标表（method="template"），跳过规则评分与 AI。
 
     Returns:
         MatchResult（table_name 可能为空字符串表示无匹配）
@@ -376,6 +380,16 @@ def match_table(
     if threshold is None:
         config = ConfigManager()
         threshold = float(config.get("ai.rule_threshold", 0.7))
+
+    # 表头模板精确命中：同意表头 → 确定性 O(1) 路由，不跑规则评分、不调 AI
+    if templates is not None and df is not None and not df.empty:
+        from src.importer.header_template import match_template
+        hit = match_template(df.columns, templates)
+        if hit is not None:
+            return MatchResult(
+                hit.table_name, 1.0, "template",
+                reason="表头模板精确匹配",
+            )
 
     tables = tables_meta if tables_meta else collect_tables(repo)
     if not tables:

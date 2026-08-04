@@ -21,7 +21,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.utils.config import ConfigManager
-from src.db.models import Base, SyncJob, ColumnRegistry, CacheEntry, utcnow
+from src.db.models import (
+    Base, SyncJob, ColumnRegistry, CacheEntry, IndicatorMap, utcnow,
+)
 
 logger = logging.getLogger("bern.db.repository")
 
@@ -93,6 +95,191 @@ class DataRepository:
 
         _collect(categories)
         return sources
+
+    # ------------------------------------------------------------------
+    # 指标归一层（meta_indicator）
+    # ------------------------------------------------------------------
+
+    def list_indicators(self) -> list[dict]:
+        """读取全部指标映射（indicator → 获信源表 + 列映射）"""
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(IndicatorMap).order_by(IndicatorMap.indicator_key)
+            ).scalars().all()
+        return [
+            {
+                "indicator_key": r.indicator_key,
+                "preferred_table": r.preferred_table,
+                "source_api": r.source_api,
+                "date_column": r.date_column,
+                "value_column": r.value_column,
+            }
+            for r in rows
+        ]
+
+    def _resolve_value_column(self, table_name: str, strict: bool = False) -> str | None:
+        """解析表的数值列：优先中文数值列名，其次第一个数值类型列
+
+        strict=True 只接受明确的数值列名（今值/现值/value 等关键词命中），
+        不做"第一个数值列"的启发式——用于自动沿用获信源，避免把 OHLC 行情
+        表的第一个数值列误当指标值。
+        """
+        from src.importer.matcher import sample_dtype
+        cols = self.get_all_existing_columns(table_name)
+        if not cols:
+            return None
+        value_keywords = ("今值", "现值", "数值", "value", "当前值")
+        for col in cols:
+            if any(kw in col.lower() for kw in value_keywords):
+                return col
+        if strict:
+            return None
+        # 没有明确数值列名 → 用第一个数值类型的列（排除日期列）
+        date_col = self._find_date_column(table_name)
+        try:
+            df = self.query(table_name, limit=50)
+            if df.empty:
+                return None
+        except Exception:
+            return None
+        for col in cols:
+            if col == date_col:
+                continue
+            try:
+                if sample_dtype(df, col) == "numeric":
+                    return col
+            except Exception:
+                continue
+        return None
+
+    def set_indicator(self, indicator_key: str, table_name: str) -> dict | None:
+        """手动选择某指标的获信源表 → 解析列映射并 UPSERT 到 meta_indicator
+
+        Returns:
+            新映射 dict；表不存在/无法解析日期列 → None
+        """
+        date_col = self._find_date_column(table_name)
+        value_col = self._resolve_value_column(table_name)
+        if not date_col or not value_col or not self.table_exists(table_name):
+            return None
+
+        # 首选源的 api_source（从目录取）
+        source_api = ""
+        for src in self.get_all_enabled_sources():
+            if src.get("table_name") == table_name:
+                source_api = str(src.get("api_source", ""))
+                break
+
+        record = {
+            "indicator_key": indicator_key,
+            "preferred_table": table_name,
+            "source_api": source_api,
+            "date_column": date_col,
+            "value_column": value_col,
+        }
+        now = _now_utc()
+        with self.engine.connect() as conn:
+            table = Table(
+                "meta_indicator", MetaData(), autoload_with=conn)
+            # 直接 Table 插入不会触发 ORM 列默认值，需显式给 created_at/updated_at
+            stmt = sqlite_insert(table).values(**record, created_at=now, updated_at=now)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["indicator_key"],
+                set_={
+                    "preferred_table": stmt.excluded.preferred_table,
+                    "source_api": stmt.excluded.source_api,
+                    "date_column": stmt.excluded.date_column,
+                    "value_column": stmt.excluded.value_column,
+                    "updated_at": now,
+                },
+            )
+            conn.execute(stmt)
+            conn.commit()
+        return record
+
+    def get_indicator_map(self, indicator_key: str) -> dict | None:
+        """读取单个指标的获信映射；无则 None"""
+        with Session(self.engine) as session:
+            m = session.execute(
+                select(IndicatorMap).where(
+                    IndicatorMap.indicator_key == indicator_key)
+            ).scalar_one_or_none()
+        if m is None:
+            return None
+        return {
+            "indicator_key": m.indicator_key,
+            "preferred_table": m.preferred_table,
+            "source_api": m.source_api,
+            "date_column": m.date_column,
+            "value_column": m.value_column,
+        }
+
+    def auto_adopt_indicator(self, indicator_key: str, table_name: str) -> dict | None:
+        """同步成功后自动沿用：该指标未设获信源、且当前表能明确解析数值列时，
+        自动把当前表设为获信源。不覆盖用户已手动的选择。
+
+        strict 解析：只接受明确的数值列名（今值/现值/value 等），避免把
+        OHLC 行情表（open/close/volume）第一个数值列误当指标值。
+        """
+        if not indicator_key or not self.table_exists(table_name):
+            return None
+        if self.get_indicator_map(indicator_key) is not None:
+            return None  # 已有获信源，不覆盖
+        date_col = self._find_date_column(table_name)
+        value_col = self._resolve_value_column(table_name, strict=True)
+        if not date_col or not value_col:
+            return None
+        return self.set_indicator(indicator_key, table_name)
+
+    def get_indicator(
+        self,
+        indicator_key: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int | None = None,
+    ) -> pd.DataFrame:
+        """统一查询指标：读 meta_indicator 获信源表 → 返回 {date, value} 两列
+
+        无映射 / 首选表未同步 / 表不存在 → 空 DataFrame（两列）。
+        """
+        empty = pd.DataFrame(columns=["date", "value"])
+        mapping = None
+        with Session(self.engine) as session:
+            mapping = session.execute(
+                select(IndicatorMap).where(
+                    IndicatorMap.indicator_key == indicator_key)
+            ).scalar_one_or_none()
+        if mapping is None:
+            return empty
+
+        df = self.query(
+            mapping.preferred_table,
+            limit=limit,
+            date_from=start_date,
+            date_to=end_date,
+        )
+        if df.empty or mapping.date_column not in df.columns \
+                or mapping.value_column not in df.columns:
+            return empty
+
+        out = pd.DataFrame({
+            "date": df[mapping.date_column],
+            "value": df[mapping.value_column],
+        })
+        return out.sort_values("date", ascending=False).reset_index(drop=True)
+
+    def indicator_candidates(self, indicator_key: str) -> list[dict]:
+        """收集目录中含指定 indicator 键的所有源（供 UI 选择获信源）"""
+        out = []
+        for src in self.get_all_enabled_sources():
+            if src.get("indicator") == indicator_key:
+                out.append({
+                    "table_name": src.get("table_name", ""),
+                    "name": src.get("name", ""),
+                    "source_key": src.get("source_key", ""),
+                    "api_source": src.get("api_source", ""),
+                })
+        return out
 
     # ------------------------------------------------------------------
     # 同步任务
@@ -374,6 +561,10 @@ class DataRepository:
         """
         if df.empty:
             return 0
+
+        # 防御：把 pandas 的 NaT/NaN/NA 转成 None，避免 SQLite 无法绑定
+        # （同步/导入/抓取等路径的数据都可能带缺失值，NaT 尤其常见于日期列）
+        df = df.where(pd.notnull(df), None)
 
         # 解析唯一键到表内真实列（如 date -> 时间）
         unique_cols = self.resolve_date_columns(table_name, unique_columns or [])

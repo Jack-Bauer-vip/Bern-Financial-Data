@@ -13,6 +13,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_cpi_yoy
       table_name: macro_usa_cpi_yoy
+      indicator: us.cpi
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国核心CPI月率
@@ -27,6 +28,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_gdp_monthly
       table_name: macro_usa_gdp_monthly
+      indicator: us.gdp
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国非农就业
@@ -34,6 +36,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_non_farm
       table_name: macro_usa_non_farm
+      indicator: us.non_farm
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国失业率
@@ -41,6 +44,7 @@ categories:
       api_source: akshare
       api_function: macro_usa_unemployment_rate
       table_name: macro_usa_unemployment_rate
+      indicator: us.unemployment
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国ISM制造业PMI
@@ -190,6 +194,7 @@ categories:
       api_source: akshare
       api_function: bond_gb_us_sina
       table_name: macro_usa_bond_yield_10y
+      indicator: us.bond_yield_10y
       has_incremental: true
       incremental_field: date
       params_template:
@@ -200,6 +205,49 @@ categories:
           - 美国10年期国债
           default: 美国10年期国债
       schedule_cron: 0 22 * * 1-5
+    - name: 🇺🇸 FRED 官方数据
+      source_key: macro.us.fred
+      children:
+      - name: 美国失业率(FRED)
+        source_key: macro.us.fred.unemployment
+        api_source: fred
+        api_function: UNRATE
+        table_name: macro_fred_unemployment
+        indicator: us.unemployment
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国10年期国债收益率(FRED)
+        source_key: macro.us.fred.bond_yield_10y
+        api_source: fred
+        api_function: DGS10
+        table_name: macro_fred_bond_yield_10y
+        indicator: us.bond_yield_10y
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国CPI(FRED)
+        source_key: macro.us.fred.cpi
+        api_source: fred
+        api_function: CPIAUCSL
+        table_name: macro_fred_cpi
+        indicator: us.cpi
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国非农就业(FRED)
+        source_key: macro.us.fred.non_farm
+        api_source: fred
+        api_function: PAYEMS
+        table_name: macro_fred_non_farm
+        indicator: us.non_farm
+        params: {}
+        schedule_cron: 0 22 * * 1-5
+      - name: 美国实际GDP(FRED)
+        source_key: macro.us.fred.gdp
+        api_source: fred
+        api_function: GDPC1
+        table_name: macro_fred_gdp
+        indicator: us.gdp
+        params: {}
+        schedule_cron: 0 22 * * 1-5
   - name: 🇪🇺 欧元区经济
     source_key: macro.eu
     children:
@@ -464,27 +512,31 @@ categories:
   children:
   - name: ETF基金日线
     source_key: fund.etf_daily
-    api_source: akshare
-    api_function: fund_etf_hist_em
+    api_source: tushare
+    api_function: fund_daily
     table_name: fund_etf_daily
     has_incremental: true
     incremental_field: date
-    # 统一中文列 → 规范英文列（与 CSV 导入的表头一致），并注入 code 列
+    # tushare fund_daily 返回 YYYYMMDD 日期，需按此格式传 start/end
+    date_format: '%Y%m%d'
+    # 统一列 → 规范英文列（保留 OHLC+amount+date+volume，丢弃 ts_code/pre_close/change/pct_chg）。
+    # 注意：ts_code 不映射到 code —— code 列由 sync_engine 注入去后缀的纯数字，
+    # 与 CSV 导入的 code=159001 一致，按 (code,date) 合并去重。
     column_map:
-      日期: date
-      开盘: open
-      收盘: close
-      最高: high
-      最低: low
-      成交量: volume
-      成交额: amount
+      trade_date: date
+      open: open
+      high: high
+      low: low
+      close: close
+      vol: volume
+      amount: amount
     code_column: code
     params_template:
-      symbol:
+      ts_code:
         type: text
         label: 基金代码
-        default: '510050'
-        placeholder: 请输入基金代码，如 510050
+        default: '159001.SZ'
+        placeholder: 请输入基金代码，如 159001 或 159001.SZ
       start_date:
         type: date
         label: 开始日期

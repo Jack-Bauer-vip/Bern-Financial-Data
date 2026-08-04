@@ -48,7 +48,11 @@ class DataFetcher:
             tushare = importlib.import_module("tushare")
             tushare.set_token(token)
             self._tushare_pro = tushare.pro_api()
-            logger.info("TuShare pro_api 初始化完成")
+            # 指向自定义 API 地址（第三方代理/官方），使 tushare 数据可访问
+            api_url = self.config.tushare_api_url
+            if api_url:
+                self._tushare_pro._DataApi__http_url = api_url
+            logger.info("TuShare pro_api 初始化完成 (API=%s)", api_url)
             return self._tushare_pro
         except Exception as exc:
             logger.error("TuShare 初始化失败: %s", exc)
@@ -85,6 +89,8 @@ class DataFetcher:
             return self._call_ak(func_name, params)
         elif api_source == "tushare":
             return self._call_ts(func_name, params)
+        elif api_source == "fred":
+            return self._call_fred(func_name, params)
         else:
             raise DataFetchError(f"不支持的 api_source: {api_source}")
 
@@ -157,6 +163,37 @@ class DataFetcher:
             return pd.DataFrame()
 
         return df
+
+    # ------------------------------------------------------------------
+    # FRED 调用（api_function 即 FRED 序列 ID）
+    # ------------------------------------------------------------------
+
+    def _call_fred(self, func_name: str, params: dict | None = None) -> pd.DataFrame:
+        """调用 FRED API 拉取序列观测值
+
+        func_name 是 FRED 序列 ID（如 UNRATE / DGS10 / CPIAUCSL）。
+        读取同步引擎注入的 start_date/end_date（date_format=%Y-%m-%d，FRED
+        原生接受）作为 observation_start/observation_end → 支持真正增量更新。
+        """
+        params = params or {}
+        api_key = self.config.fred_api_key
+        if not api_key:
+            raise DataFetchError("FRED_API_KEY 未配置，请在 .env 中设置")
+
+        from src.core.fred_client import fetch_series
+
+        start = params.get("start_date") or params.get("observation_start")
+        end = params.get("end_date") or params.get("observation_end")
+        timeout = float(self.config.get("sync.request_timeout", 30))
+
+        logger.debug("FRED 调用 %s (区间 %s ~ %s)",
+                     func_name, start or "全量", end or "至今")
+        return fetch_series(
+            func_name, api_key,
+            observation_start=start, observation_end=end,
+            base_url=self.config.fred_api_url,
+            timeout=timeout,
+        )
 
     # ------------------------------------------------------------------
     # 内部工具

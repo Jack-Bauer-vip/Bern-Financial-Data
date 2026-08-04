@@ -1,6 +1,7 @@
 """增量同步引擎 — 核心数据流水线"""
 
 import random
+import re
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -42,6 +43,27 @@ def _is_source_busy(table_name: str) -> bool:
     with _sync_locks_guard:
         lock = _sync_locks.get(table_name)
     return lock is not None and lock.locked()
+
+
+def normalize_ts_code(code: str) -> str:
+    """归一化 tushare 代码：有后缀则大写归一，纯 6 位则按前缀推断交易所。
+
+    159001 → 159001.SZ；510050 → 510050.SH；159001.sz → 159001.SZ。
+    """
+    code = (code or "").strip().upper()
+    if not code:
+        return ""
+    if re.fullmatch(r"\d{6}\.(SZ|SH|BJ)", code):
+        return code
+    if re.fullmatch(r"\d{6}", code):
+        # 5/6 开头多为上交所，其余（15/16/4 等）多为深交所
+        return code + (".SH" if code[0] in "56" else ".SZ")
+    return code
+
+
+def _strip_exchange(code: str) -> str:
+    """去掉 tushare 代码的交易所后缀：159001.SZ → 159001"""
+    return re.sub(r"\.(SZ|SH|BJ)$", "", (code or "").strip(), flags=re.I)
 
 
 # ---------------------------------------------------------------------------
@@ -232,10 +254,10 @@ class SyncEngine(QObject):
             params: dict[str, Any] = {}
             override = params_override or {}
 
-            # ★ 注入代码类参数（指数/基金等需要 symbol/code 的源）：
+            # ★ 注入代码类参数（指数/基金等需要 symbol/code/ts_code 的源）：
             #   params_override（GUI 用户输入）优先，其次 params_template 的 default，
             #   避免同步时缺代码静默拉错数据
-            for pkey in ("symbol", "code"):
+            for pkey in ("symbol", "code", "ts_code"):
                 if pkey in override and str(override.get(pkey, "")).strip():
                     params[pkey] = str(override[pkey]).strip()
                 elif pkey in (source_cfg.get("params_template") or {}):
@@ -243,31 +265,36 @@ class SyncEngine(QObject):
                     if default:
                         params[pkey] = str(default)
 
-            # 代码值（写入 symbol/code 列用，需在 param_map 重命名前取到）
-            code_value = str(params.get("code") or params.get("symbol") or "")
+            # 代码值（写入 code/symbol 列用，需在 param_map 重命名前取到）。
+            # ts_code 去交易所后缀（159001.SZ → 159001），与 CSV 导入的 code 对齐。
+            code_value = str(params.get("code") or params.get("symbol") or params.get("ts_code") or "")
+            code_value = _strip_exchange(code_value)
             code_col = source_cfg.get("code_column")
             if not code_col:
                 code_col = ("symbol" if "symbol" in (source_cfg.get("params_template") or {})
                             else "code" if "code" in (source_cfg.get("params_template") or {})
                             else "")
 
-            # 增量起点：有 code 时优先用该 code 的实际数据最大日期（防 last_sync_date
-            # 污染 / 与多 code 表脱节），否则用表级 last_sync_date
+            # 日期参数格式（tushare 用 %Y%m%d，akshare 默认 ISO %Y-%m-%d）
+            date_fmt = source_cfg.get("date_format", "%Y-%m-%d")
+
+            # 增量起点：有 code 时【无条件】用该 code 的实际数据最大日期作起点。
+            # 表级 last_sync_date 是全局的（可能被其他 code 的同步更新抬高，如 159001
+            # 同步后表级变 7-31，而 159003 只到 6-22），对单个 code 无意义——若用它
+            # 会跳过该 code 该补的区间。表级仅在 code 无数据时兜底。
             start_ref = last_date
             if code_value and code_col:
                 actual = self.repo.get_max_date(table_name, code_col, code_value)
                 if actual:
                     try:
-                        actual_d = date.fromisoformat(str(actual))
-                        if last_date is None or actual_d > last_date:
-                            start_ref = actual_d
+                        start_ref = date.fromisoformat(str(actual))
                     except ValueError:
                         pass
 
             if full_refresh or start_ref is None:
                 # 首次或无历史 -> 回退到固定历史区间
-                params["start_date"] = (date.today() - timedelta(days=365 * history_years)).isoformat()
-                params["end_date"] = date.today().isoformat()
+                params["start_date"] = (date.today() - timedelta(days=365 * history_years)).strftime(date_fmt)
+                params["end_date"] = date.today().strftime(date_fmt)
                 self._log("INFO", f"全量模式: {params['start_date']} ~ {params['end_date']}")
             else:
                 # 增量模式：从参考日期（实际数据 max 或 last_sync_date）的次日起
@@ -277,8 +304,8 @@ class SyncEngine(QObject):
                               f"[{source_key}] {code_value or ''} 数据已到 {start_ref.isoformat()}，无需增量同步")
                     self.sync_completed.emit(source_key, 0)
                     return 0
-                params["start_date"] = start.isoformat()
-                params["end_date"] = date.today().isoformat()
+                params["start_date"] = start.strftime(date_fmt)
+                params["end_date"] = date.today().strftime(date_fmt)
                 self._log("INFO", f"增量模式: {params['start_date']} ~ {params['end_date']}")
 
             # 统一参数名映射（akshare 常用 start_date/end_date）
@@ -344,6 +371,16 @@ class SyncEngine(QObject):
                 "error_message": None,
                 "enabled": True,
             })
+
+            # 8.5 指标归一层：同步成功后自动沿用获信源——该指标未设获信源、
+            #     且当前表能明确解析数值列（今值/现值/value 等）时，首个同步
+            #     成功的源自动成为默认获信源；用户可随后在 GUI 手动覆盖。
+            ind_key = source_cfg.get("indicator")
+            if ind_key:
+                try:
+                    self.repo.auto_adopt_indicator(str(ind_key), table_name)
+                except Exception:
+                    pass  # 自动沿用失败不影响同步结果
 
             self._log("INFO", f"[{source_key}] 同步完成，新增 {added} 条")
             self.sync_completed.emit(source_key, added)
@@ -461,8 +498,32 @@ class SyncEngine(QObject):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _normalize_cn_date_str(value) -> str:
+        """把中文年月日字符串归一化为 pd.to_datetime 可解析的形式
+
+        覆盖 akshare 常见格式：
+        2008年01月 / 2008年1月 → 2008-01（年+月、无日）
+        2008年01月15日 → 2008-01-15
+        非字符串 / 无中文日期字样的原样返回。
+        """
+        if not isinstance(value, str):
+            return value
+        s = value.strip()
+        if not any(c in s for c in "年月日"):
+            return s
+        s = s.replace("年", "-").replace("月", "-").replace("日", "")
+        # 去掉尾部残留分隔符（无日期的年月会留下 "2008-01-"）
+        s = re.sub(r"[-/]+$", "", s).strip()
+        return s
+
+    @staticmethod
     def _clean_data(df: pd.DataFrame) -> pd.DataFrame:
-        """标准化数据：删除全空行、转换日期列"""
+        """标准化数据：删除全空行、转换日期列
+
+        修复：akshare 某些宏观函数日期列是 "2008年01月"（年+月、无日），
+        pd.to_datetime 解析不了会整列变 NaT，导致写库时 SQLite 无法绑定。
+        这里先归一化中文年月日，再丢弃仍无法解析的行（避免 NaT 崩库）。
+        """
         if df.empty:
             return df
 
@@ -475,14 +536,30 @@ class SyncEngine(QObject):
             col_lower = col.lower().strip()
             if any(kw in col_lower for kw in date_keywords):
                 try:
+                    # 先归一化中文年月日格式（akshare 常见 "2008年01月"）。
+                    # 注意：pandas 3.x 字符串列是 str dtype 而非 object，须用
+                    # is_string_dtype 判断，否则归一化被跳过 → 整列变 NaT。
+                    if pd.api.types.is_string_dtype(df[col]):
+                        df[col] = df[col].map(SyncEngine._normalize_cn_date_str)
                     df[col] = pd.to_datetime(df[col], errors="coerce")
-                    # 统一为 date 类型（不含时间部分）
-                    if df[col].dt.time is not None:
-                        # 若全部为 00:00:00 则转为 date
-                        if (df[col].dropna().dt.time == pd.Timestamp("00:00:00").time()).all():
-                            df[col] = df[col].dt.date
+                    # 若全部为 00:00:00 则统一为 date 类型（不含时间部分）
+                    clean = df[col].dropna()
+                    if not clean.empty and \
+                            (clean.dt.time == pd.Timestamp("00:00:00").time()).all():
+                        df[col] = df[col].dt.date
                 except Exception:
                     pass  # 转换失败则保留原值
+
+        # 防御：日期列仍有 NaT（无法解析/缺失）的行直接丢弃——
+        #   数据表以日期为唯一键，无日期的行无法写入；也避免 NaT 绑参崩溃
+        for col in df.columns:
+            col_lower = col.lower().strip()
+            if any(kw in col_lower for kw in date_keywords):
+                na = df[col].isna()
+                if na.any():
+                    n = int(na.sum())
+                    logger.warning("日期列 %s 有 %d 行无法解析/缺失，已丢弃", col, n)
+                    df = df[~na]
 
         return df
 
@@ -493,14 +570,15 @@ class SyncEngine(QObject):
     @staticmethod
     def _extract_max_date(df: pd.DataFrame) -> date | None:
         """从 DataFrame 中自动检测日期列并提取最大日期"""
-        date_candidates = ["date", "日期", "trade_date", "datetime", "end_date", "start_date"]
+        date_candidates = ["date", "日期", "时间", "trade_date", "datetime", "end_date", "start_date"]
         for col in date_candidates:
             if col in df.columns and not df[col].isna().all():
                 try:
                     # 若已是 date 类型
                     if pd.api.types.is_datetime64_any_dtype(df[col]):
                         return df[col].max().date()
-                    if pd.api.types.is_object_dtype(df[col]):
+                    if pd.api.types.is_object_dtype(df[col]) or \
+                            pd.api.types.is_string_dtype(df[col]):
                         parsed = pd.to_datetime(df[col], errors="coerce")
                         if parsed.notna().any():
                             return parsed.max().date()

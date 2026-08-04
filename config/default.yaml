@@ -24,11 +24,27 @@ api:
   port: 8765
   enabled: true
 
+tushare:
+  # tushare API 地址。默认用第三方代理（本机到 tushare 官方受限时可用）；
+  # 也可改成官方 https://api.waditu.com 或留空用 SDK 默认。
+  api_url: "https://ts.gyzcloud.top/api"
+
+fred:
+  # FRED API（圣路易斯联储官方美国宏观数据）。
+  # 密钥用环境变量 FRED_API_KEY 提供（.env），免费申请：
+  # https://fred.stlouisfed.org/docs/api/api_key.html
+  api_url: "https://api.stlouisfed.org"
+
 schedules:
   macro_us: "0 22 * * 1-5"      # 美国宏观 工作日22:00
   macro_cn: "0 10 * * *"        # 中国宏观 每天10:00
   macro_eu: "0 15 * * 1-5"      # 欧洲宏观 工作日15:00
   stock: "30 18 * * 1-5"        # 股票 交易日18:30
+
+import:
+  # 表头记忆模板：统一表头的导入先精确命中「表头→目标表」，跳过规则评分与 AI
+  template_file: "data/header_templates.json"   # 学习到的模板持久化位置
+  learn_templates: true                         # 用户手动指定/AI识别确认后自动记忆
 
 ai:
   # 智能导入的 AI 提供方：ollama（本地）/ deepseek（API，可选）

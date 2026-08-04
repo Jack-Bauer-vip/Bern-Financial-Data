@@ -65,8 +65,56 @@ class SyncWorker(QObject):
             self.finished.emit()
 
 
+def _build_sync_jobs(
+    source_keys: list[str],
+    src: dict | None,
+    repo,
+    param_panel,
+    local_code_column_fn,
+) -> list[tuple[str, dict | None]]:
+    """构建同步计划 [(source_key, params_override), ...]
+
+    对「含多个代码」的数据源（基金/股票/指数）：
+    - 本地筛选下拉选了具体代码 → 只同步该代码
+    - 选「全部」→ 遍历表中已有的每个代码逐个同步（每次一个 job）
+    - 无 code 列 / 表无数据 → 用输入框/默认代码同步一次（params=None）
+
+    Returns
+    -------
+    list[tuple[str, dict | None]]
+        (source_key, params_override) 列表
+    """
+    if not source_keys or not src:
+        return [(k, None) for k in source_keys]
+
+    pt = src.get("params_template") or {}
+    code_param = next((k for k in ("ts_code", "symbol", "code") if k in pt), None)
+    code_col = local_code_column_fn(src.get("table_name")) if src.get("table_name") else None
+    if not code_param or not code_col:
+        # 非代码型源 → 每源同步一次（默认代码）
+        return [(k, None) for k in source_keys]
+
+    def _mk_params(code: str) -> dict:
+        if code_param == "ts_code":
+            from src.core.sync_engine import normalize_ts_code
+            return {"ts_code": normalize_ts_code(code)}
+        return {code_param: code}
+
+    local_code = param_panel.getSelectedLocalCode()
+    if local_code:
+        # 下拉选了具体代码 → 每个源同步该代码
+        p = _mk_params(local_code)
+        return [(k, p) for k in source_keys]
+
+    # 选「全部」→ 遍历表中已有代码
+    codes = repo.get_distinct_values(src["table_name"], code_col)
+    if not codes:
+        return [(k, None) for k in source_keys]
+    return [(k, _mk_params(c)) for c in codes for k in source_keys]
+
+
 class SyncListWorker(QObject):
-    """批量同步工作器 — 按列表顺序同步多个数据源
+    """批量同步工作器 — 按同步计划列表顺序执行
 
     单个数据源失败不中断后续；每个源的结果仍通过
     SyncEngine 的信号（sync_completed / sync_error）上报。
@@ -75,20 +123,19 @@ class SyncListWorker(QObject):
     finished = Signal()
     error = Signal(str)
 
-    def __init__(self, sync_engine: SyncEngine, source_keys: list[str], history_years: int = 3,
-                 params: dict | None = None):
+    def __init__(self, sync_engine: SyncEngine, jobs: list[tuple[str, dict | None]],
+                 history_years: int = 3):
         super().__init__()
         self.sync_engine = sync_engine
-        self.source_keys = source_keys
+        self.jobs = jobs  # [(source_key, params_override), ...]
         self.history_years = history_years
-        self.params = params or {}
 
     def run(self) -> None:
         try:
-            for key in self.source_keys:
+            for key, params in self.jobs:
                 try:
                     self.sync_engine.run(
-                        key, self.history_years, params_override=self.params or None)
+                        key, self.history_years, params_override=params or None)
                 except Exception as exc:
                     self.error.emit(f"{key}: {exc}")
         finally:
@@ -456,6 +503,7 @@ class MainWindow(QMainWindow):
         self.param_panel.updateMethodSelected.connect(self.on_update_method)
         self.param_panel.initClicked.connect(self.on_init_wizard)
         self.param_panel.testClicked.connect(self._on_test_connection)
+        self.param_panel.trustClicked.connect(self._on_trust_clicked)
         self.param_panel.export_csv_action.triggered.connect(self._open_export_dialog)
         self.param_panel.export_excel_action.triggered.connect(self._open_export_dialog)
         self.param_panel.export_pdf_action.triggered.connect(self._open_export_dialog)
@@ -748,6 +796,16 @@ class MainWindow(QMainWindow):
         else:
             self.param_panel.clearParams()
 
+        # 3.5 指标获信区：当前源有 indicator 键才显示，并展示已设获信源
+        indicator_key = source.get("indicator", "")
+        mapping = None
+        if indicator_key:
+            try:
+                mapping = self.repo.get_indicator_map(indicator_key)
+            except Exception:
+                mapping = None
+        self.param_panel.setIndicatorContext(indicator_key, mapping)
+
         # 4. 从数据库加载已有数据
         table_name = source.get("table_name")
         # 刷新「本地已有代码」下拉（读表去重）
@@ -807,15 +865,20 @@ class MainWindow(QMainWindow):
             self.log_widget.write("WARNING", f"数据源 [{source_key}] 未配置表名")
             return
 
-        # 代码筛选：优先本地代码下拉，其次输入的 symbol/code 参数
+        # 代码筛选：优先本地代码下拉，其次输入的 ts_code/symbol/code 参数。
+        # 注意：本地表 code 列存纯数字（如 510300），ts_code 常带 .SH/.SZ 后缀，
+        # 查询前去掉后缀再匹配，否则键入 ts_code 无法命中本地数据。
         filters: dict = {}
         code_col = self._local_code_column(table_name)
         if code_col:
             local_code = self.param_panel.getSelectedLocalCode()
             if local_code:
                 filters[code_col] = local_code
-            elif params.get("symbol") or params.get("code"):
-                filters[code_col] = params.get("symbol") or params.get("code")
+            else:
+                for pkey in ("ts_code", "symbol", "code"):
+                    if params.get(pkey):
+                        filters[code_col] = self._strip_code_suffix(params[pkey])
+                        break
 
         self.log_widget.write("INFO", f"正在查询本地表 [{table_name}] ...")
         self.statusBar().showMessage(f"查询本地: {source_key} ...")
@@ -828,6 +891,12 @@ class MainWindow(QMainWindow):
             if c in existing:
                 return c
         return None
+
+    @staticmethod
+    def _strip_code_suffix(code: str) -> str:
+        """去掉 tushare 代码交易所后缀：159001.SZ → 159001；原样返回非代码串"""
+        from src.core.sync_engine import _strip_exchange
+        return _strip_exchange(code)
 
     def _query_local_table(
         self,
@@ -1225,29 +1294,32 @@ class MainWindow(QMainWindow):
             self.log_widget.write("INFO", "已取消同步")
             return
 
-        # 4. 提取当前界面选中的代码传给同步，使增量同步对具体代码生效：
-        #    优先「本地筛选」下拉选中的代码，其次 symbol/code 输入框，最后默认
-        sync_params: dict = {}
+        # 4. 构建同步计划：优先本地筛选下拉选中的代码；选「全部」则遍历表中
+        #    每个已有代码逐个同步（基金/股票等多代码源）
         src = self.registry.get_source(source_keys[0]) if source_keys else None
-        if src:
-            code_col = self._local_code_column(src.get("table_name"))
-            if code_col:
-                local_code = self.param_panel.getSelectedLocalCode()
-                if local_code:
-                    sync_params["symbol" if code_col == "symbol" else "code"] = local_code
-        if not sync_params:
+        jobs = _build_sync_jobs(
+            source_keys, src, self.repo, self.param_panel, self._local_code_column)
+        if src and not any(p for _, p in jobs if p):
+            # 无明确代码（非代码型源或表无数据）→ 用输入框/默认参数
             params = self.param_panel.getParams()
-            for pkey in ("symbol", "code"):
+            for pkey in ("ts_code", "symbol", "code"):
                 val = str(params.get(pkey, "")).strip()
-                if val:
-                    sync_params[pkey] = val
+                if val and pkey in (src.get("params_template") or {}):
+                    jobs = [(k, {pkey: val}) for k in source_keys]
+                    break
 
         # 5. 后台顺序同步
-        code_info = f" (代码={sync_params})" if sync_params else ""
+        code_info = ""
+        codes_shown = [p.get("ts_code") or p.get("symbol") or p.get("code")
+                       for _, p in jobs if p]
+        if codes_shown:
+            shown = codes_shown[:8]
+            code_info = f" ({len(jobs)}个任务, 代码={'/'.join(shown)}"
+            code_info += "…" if len(codes_shown) > len(shown) else ")"
         self.log_widget.write(
-            "INFO", f"开始同步 {len(source_keys)} 个数据源{code_info} ...")
+            "INFO", f"开始同步 {len(jobs)} 个任务{code_info} ...")
         thread = QThread(self)
-        worker = SyncListWorker(self.sync_engine, source_keys, params=sync_params)
+        worker = SyncListWorker(self.sync_engine, jobs)
         # ★ 防 GC：worker 是局部变量，函数返回后被回收会导致 started 连接失效
         #   （worker.run 永不执行）。挂到 thread 上保活，thread 由 self._threads 持有。
         thread._worker_ref = worker
@@ -1449,12 +1521,20 @@ class MainWindow(QMainWindow):
 
     def _open_export_dialog(self) -> None:
         """打开导出对话框"""
-        df = self.table_view.pandas_model.getDataFrame()
-        if df.empty:
-            QMessageBox.information(self, "提示", "当前没有可导出的数据")
-            return
-
-        source_key = self._current_source_key or "data"
+        # 已设获信源 → 导出获信指标序列（统一数据）；否则导出当前表格
+        src = None
+        if self._current_source_key:
+            src = self.registry.get_source(self._current_source_key)
+        trusted_df = self._trusted_indicator_df(src)
+        if trusted_df is not None:
+            df = trusted_df
+            source_key = src["indicator"] or "indicator"
+        else:
+            df = self.table_view.pandas_model.getDataFrame()
+            if df.empty:
+                QMessageBox.information(self, "提示", "当前没有可导出的数据")
+                return
+            source_key = self._current_source_key or "data"
         dialog = ExportDialog(df, source_key, self)
         dialog.exec()
 
@@ -1495,20 +1575,75 @@ class MainWindow(QMainWindow):
         dialog = HealthDialog(self.repo, self.registry, self.scheduler, self)
         dialog.exec()
 
-    def _show_ai_analyze(self) -> None:
-        """打开 AI 智能分析对话框（分析当前表格数据）"""
-        # 当前表格数据（无论来自查询还是数据库加载）
-        df = self.table_view.pandas_model.getDataFrame()
-        if df is None or df.empty:
-            QMessageBox.information(self, "提示",
-                "当前表格没有可分析的数据\n\n"
-                "请先在左侧选择数据源并查询/同步数据，再执行 AI 分析")
+    def _trusted_indicator_df(self, source) -> "pd.DataFrame | None":
+        """若当前源有 indicator 且已设获信源 → 返回获信 {date,value}；否则 None"""
+        if not source:
+            return None
+        ind = source.get("indicator", "")
+        if not ind:
+            return None
+        if self.repo.get_indicator_map(ind) is None:
+            return None
+        try:
+            df = self.repo.get_indicator(ind, limit=None)
+        except Exception:
+            return None
+        return df if not df.empty else None
+
+    def _on_trust_clicked(self) -> None:
+        """把当前数据源设为该指标的获信（首选）来源"""
+        source_key = self._current_source_key
+        if not source_key:
+            return
+        source = self.registry.get_source(source_key)
+        if not source:
+            return
+        indicator_key = source.get("indicator", "")
+        table_name = source.get("table_name", "")
+        if not indicator_key or not table_name:
+            QMessageBox.information(
+                self, "提示", "当前数据源未定义 indicator，无法设为获信源")
             return
 
-        # 目标表名
-        table_name = self._current_source_key or "当前数据"
+        record = self.repo.set_indicator(indicator_key, table_name)
+        if record is None:
+            QMessageBox.warning(
+                self, "设置失败",
+                f"无法把表 [{table_name}] 设为获信源：\n"
+                "未能解析日期列/数值列，或表不存在。")
+            return
+
+        # 刷新指标获信区 + 日志
+        mapping = self.repo.get_indicator_map(indicator_key)
+        self.param_panel.setIndicatorContext(indicator_key, mapping)
+        self.log_widget.write(
+            "INFO", f"已设 [{table_name}] 为指标 {indicator_key} 的获信源")
+        QMessageBox.information(
+            self, "已设为获信源",
+            f"指标 {indicator_key}\n获信源: {table_name}\n\n"
+            "之后 AI 分析 / 导出 / /macro/cpi 将统一读取获信源数据。")
+
+    def _show_ai_analyze(self) -> None:
+        """打开 AI 智能分析对话框（分析当前表格数据）"""
+        # 当前源及其指标获信数据（若已设获信源 → 分析获信序列，保证统一）
+        src = None
         if self._current_source_key:
             src = self.registry.get_source(self._current_source_key)
+        trusted_df = self._trusted_indicator_df(src)
+        if trusted_df is not None:
+            df = trusted_df
+            mapping = self.repo.get_indicator_map(src["indicator"])
+            table_name = f"{src['indicator']} · 获信源 {mapping['preferred_table']}"
+        else:
+            # 当前表格数据（无论来自查询还是数据库加载）
+            df = self.table_view.pandas_model.getDataFrame()
+            if df is None or df.empty:
+                QMessageBox.information(self, "提示",
+                    "当前表格没有可分析的数据\n\n"
+                    "请先在左侧选择数据源并查询/同步数据，再执行 AI 分析")
+                return
+            # 目标表名
+            table_name = self._current_source_key or "当前数据"
             if src and src.get("table_name"):
                 table_name = src["table_name"]
 

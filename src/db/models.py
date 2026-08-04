@@ -104,3 +104,26 @@ class CacheEntry(Base):
 
     def __repr__(self) -> str:
         return f"<CacheEntry {self.cache_key} rows={self.row_count}>"
+
+
+class IndicatorMap(Base):
+    """指标归一层 — 记录每个指标的获信（首选）来源与列映射
+
+    数据本体仍留在各源数据表（不复制）；本表只存「indicator → 首选源表 +
+    日期列 + 数值列」，供统一查询接口 get_indicator 使用。获信源由用户手动
+    选择（set_indicator），自动沿用（下次 get_indicator 直接读本表）。
+    """
+
+    __tablename__ = "meta_indicator"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    indicator_key: Mapped[str] = mapped_column(String(64), unique=True)
+    preferred_table: Mapped[str] = mapped_column(String(64))     # 获信源表
+    source_api: Mapped[str] = mapped_column(String(16))          # 首选源的 api_source
+    date_column: Mapped[str] = mapped_column(String(64))         # 首选源表实际日期列
+    value_column: Mapped[str] = mapped_column(String(64))        # 首选源表实际数值列
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    def __repr__(self) -> str:
+        return f"<IndicatorMap {self.indicator_key} -> {self.preferred_table}>"

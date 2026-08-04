@@ -18,6 +18,7 @@ class ParamPanel(QWidget):
     initClicked = Signal()
     testClicked = Signal()
     updateMethodSelected = Signal(str)  # "api" | "file" | "scrape"
+    trustClicked = Signal()             # 点击「设为获信源」
 
     # 控件类型映射
     CONTROL_TYPE_MAP = {
@@ -52,15 +53,35 @@ class ParamPanel(QWidget):
         self._no_param_label = None
 
         # ★ 本地筛选 — 代码下拉（由 MainWindow 用本地表已有代码填充）
+        # 可编辑：既能点选本地已有代码，也能直接键入未同步的代码；
+        # NoInsert 防止键入值污染候选列表（只在本次生效，不进入 item 列表）。
         self._local_filter_group = QGroupBox("本地筛选")
         local_layout = QHBoxLayout(self._local_filter_group)
         self.local_code_combo = QComboBox()
         self.local_code_combo.addItem("全部")
+        self.local_code_combo.setEditable(True)
+        self.local_code_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.local_code_combo.setPlaceholderText("代码或全部")
         self.local_code_combo.setMinimumWidth(120)
         local_layout.addWidget(QLabel("代码:"))
         local_layout.addWidget(self.local_code_combo)
         local_layout.addStretch()
         layout.addWidget(self._local_filter_group)
+
+        # ★ 指标获信 — 仅对含 indicator 键的数据源显示（默认隐藏）
+        self._indicator_group = QGroupBox("指标获信")
+        ind_layout = QHBoxLayout(self._indicator_group)
+        self.trust_info_label = QLabel("")
+        self.trust_info_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.trust_info_label.setWordWrap(True)
+        self.trust_btn = QPushButton("设为获信源")
+        self.trust_btn.setToolTip("把当前数据源设为该指标的获信（首选）来源\n"
+                                  "之后 AI 分析 / 导出 / /macro/cpi 统一读获信源数据")
+        self.trust_btn.clicked.connect(self.trustClicked.emit)
+        ind_layout.addWidget(self.trust_info_label, stretch=1)
+        ind_layout.addWidget(self.trust_btn)
+        self._indicator_group.setVisible(False)
+        layout.addWidget(self._indicator_group)
 
         # ★ 常驻日期范围 — 所有数据源都可见
         self._date_group = QGroupBox("日期范围")
@@ -330,18 +351,52 @@ class ParamPanel(QWidget):
     # ------------------------------------------------------------------
 
     def setLocalCodes(self, codes: list[str]) -> None:
-        """用本地表已有代码填充下拉（保留当前选择；默认「全部」）"""
+        """用本地表已有代码填充下拉（保留当前选择；默认「全部」）
+
+        下拉可编辑：若用户已键入的文本不在新列表里，先临时加入并选中，
+        避免 clear() 把键入值清掉；键入值不写回模板/候选，仅本次生效。
+        """
         current = self.local_code_combo.currentText()
+        items = [str(c) for c in codes or []]
         self.local_code_combo.blockSignals(True)
         self.local_code_combo.clear()
         self.local_code_combo.addItem("全部")
-        for c in codes or []:
-            self.local_code_combo.addItem(str(c))
+        for c in items:
+            self.local_code_combo.addItem(c)
         idx = self.local_code_combo.findText(current)
-        self.local_code_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        if idx >= 0:
+            self.local_code_combo.setCurrentIndex(idx)
+        elif current and current != "全部":
+            # 键入但未入列 → 临时加入并选中，保留值
+            self.local_code_combo.addItem(current)
+            self.local_code_combo.setCurrentIndex(
+                self.local_code_combo.count() - 1)
+        else:
+            self.local_code_combo.setCurrentIndex(0)
         self.local_code_combo.blockSignals(False)
 
     def getSelectedLocalCode(self) -> str:
         """当前选中的本地代码（「全部」返回空字符串）"""
         text = self.local_code_combo.currentText()
         return "" if not text or text == "全部" else text
+
+    # ------------------------------------------------------------------
+    # 指标获信（设为获信源）
+    # ------------------------------------------------------------------
+
+    def setIndicatorContext(self, indicator_key: str, mapping: dict | None) -> None:
+        """根据当前数据源更新指标获信区
+
+        indicator_key 为空 → 隐藏该区；否则显示获信源状态。
+        """
+        if not indicator_key:
+            self._indicator_group.setVisible(False)
+            return
+        self._indicator_group.setVisible(True)
+        if mapping and mapping.get("preferred_table"):
+            self.trust_info_label.setText(
+                f"指标 {indicator_key} · 获信源: {mapping['preferred_table']}")
+            self.trust_btn.setText("已设获信源")
+        else:
+            self.trust_info_label.setText(f"指标 {indicator_key} · 未设获信源")
+            self.trust_btn.setText("设为获信源")
