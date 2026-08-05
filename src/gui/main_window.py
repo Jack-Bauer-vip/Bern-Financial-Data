@@ -305,6 +305,16 @@ class MainWindow(QMainWindow):
         # 后台线程引用（防止GC）
         self._threads: list[QThread] = []
 
+        # ★ 表格刷新防抖：同步期间每个 source/code 完成都会触发刷新，
+        #   用 300ms 单发 timer 合并多次请求，只在空闲后刷一次，且查询放后台
+        #   线程——避免主线程被 repo.query + 全量 model reset 阻塞导致 UI 无响应
+        self._refresh_in_progress = False
+        self._refresh_pending = False
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(300)
+        self._refresh_timer.timeout.connect(self._do_refresh_current_table)
+
         # ★ 跨线程结果队列
         self._result_queue: queue.Queue = queue.Queue()
         self._result_timer = QTimer(self)
@@ -1447,29 +1457,79 @@ class MainWindow(QMainWindow):
         self.log_widget.write("ERROR", f"同步失败 [{source_key}]: {error}")
 
     def _refresh_current_table(self) -> None:
-        """刷新当前显示的数据表（沿用当前代码/日期筛选）"""
-        if self._current_source_key:
-            source = self.registry.get_source(self._current_source_key)
-            if source and source.get("table_name"):
-                params = self.param_panel.getParams()
-                filters: dict = {}
-                code_col = self._local_code_column(source["table_name"])
-                if code_col:
-                    local_code = self.param_panel.getSelectedLocalCode()
-                    if local_code:
-                        filters[code_col] = local_code
-                try:
-                    df = self.repo.query(
-                        source["table_name"], filters=filters, limit=5000,
-                        date_from=params.get("start_date") or None,
-                        date_to=params.get("end_date") or None,
-                    )
-                    self.table_view.loadDataFrame(df)
-                    self._update_row_count(df)
-                except Exception as exc:
-                    self.log_widget.write(
-                        "ERROR", f"刷新数据失败: {exc}"
-                    )
+        """防抖刷新当前表：合并同步期间的多次请求，空闲 300ms 后后台查库
+
+        原实现在主线程直接 repo.query + loadDataFrame(全量 model reset)，
+        逐 code 同步时每个完成都触发一次，主线程被 N 次 DB 查询 + 重绘阻塞
+        → 用户拖动滚动条时无响应。现改为：单发 timer 防抖 + 后台 QueryWorker。
+        """
+        if not self._current_source_key:
+            return
+        # 若已有后台查询在跑，标记 pending，完成后补刷一次
+        if self._refresh_in_progress:
+            self._refresh_pending = True
+            return
+        self._refresh_timer.start()
+
+    def _do_refresh_current_table(self) -> None:
+        """防抖到期：启动后台查询（真正执行刷新）"""
+        if self._refresh_in_progress:
+            self._refresh_pending = True
+            return
+        source = self.registry.get_source(self._current_source_key or "")
+        if not source or not source.get("table_name"):
+            return
+        params = self.param_panel.getParams()
+        filters: dict = {}
+        code_col = self._local_code_column(source["table_name"])
+        if code_col:
+            local_code = self.param_panel.getSelectedLocalCode()
+            if local_code:
+                filters[code_col] = local_code
+        self._refresh_in_progress = True
+        self._start_background_refresh(
+            source["table_name"], filters,
+            params.get("start_date") or None, params.get("end_date") or None)
+
+    def _start_background_refresh(
+        self, table_name: str, filters: dict,
+        date_from: str | None, date_to: str | None,
+    ) -> None:
+        """在后台线程查当前表（复用 QueryWorker），主线程只负责加载结果"""
+        thread = QThread(self)
+        worker = QueryWorker(
+            self.repo, table_name, filters,
+            date_from=date_from, date_to=date_to, limit=5000)
+        # ★ 防 GC：worker 局部变量函数返回后被回收，started 连接失效
+        thread._worker_ref = worker
+        worker.moveToThread(thread)
+
+        worker.finished.connect(lambda df: self._apply_refresh_result(df))
+        worker.error.connect(
+            lambda err: self._on_refresh_error(err))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        thread.started.connect(worker.run)
+        thread.start()
+        self._threads.append(thread)
+        thread.finished.connect(lambda: self._cleanup_thread(thread))
+
+    def _apply_refresh_result(self, df) -> None:
+        """主线程应用后台查询结果（loadDataFrame）"""
+        self._refresh_in_progress = False
+        # 查询期间又有刷新请求 → 补刷一次
+        if self._refresh_pending:
+            self._refresh_pending = False
+            self._refresh_timer.start()
+        self.table_view.loadDataFrame(df)
+        self._update_row_count(df)
+
+    def _on_refresh_error(self, err: str) -> None:
+        """后台刷新失败：复位标志，保证后续刷新不被卡住"""
+        self._refresh_in_progress = False
+        self.log_widget.write("ERROR", f"刷新数据失败: {err}")
 
     # ------------------------------------------------------------------
     # 更新方式（更新 ▼ 菜单）

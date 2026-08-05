@@ -91,6 +91,13 @@ class DataTableView(QTableView):
 
         self.verticalHeader().setDefaultSectionSize(28)
         self.verticalHeader().setHighlightSections(False)
+        # ★ 性能优化：统一行高 + 固定行高模式，QTableView 跳过逐行测量，
+        #   model reset(loadDataFrame) 后重建更快，滚动更流畅
+        self.setUniformRowHeights(True)
+        self.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Fixed)
+        self.setVerticalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel)
 
         # 样式
         # 样式（由全局 app.py 深色主题控制）

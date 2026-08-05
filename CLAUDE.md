@@ -95,6 +95,12 @@ SyncEngine.run(source_key)                               │  同步/导入/抓�
 - **新鲜度**:`src/core/freshness.py` 纯函数(从 health_dialog 拆出),供 GUI 对话框/`/health`(返回 stale_sources/stale_count,排除 deprecated)/CLI `check_freshness.py` 三方共用。CLI 可配 webhook(env `FRESHNESS_WEBHOOK_URL`,钉钉/飞书/Server酱 通用)。**预期间隔优先按实际数据频率推断**(`infer_expected_days_from_dates` 复用 `transform.infer_frequency`:月频→32天/季频→95天),替代纯 cron 推断,避免 FRED 月频误报"停更"。
 - **基金日线批量同步**:`SyncEngine.run_fund_daily_batch()`。fund_etf_daily 逐个 code 同步每次 2.2s(两段硬编码睡眠)、1000 只 ~37min;改为**按交易日批量**——tushare `fund_daily(trade_date=)` 一次返回当天全市场 ~2000 只,从表内最大日期+1 到今天逐交易日拉取,补 N 天只需 N 次调用。全市场入库(不限于库内已有 code)。GUI 同步「ETF基金日线」时(未选具体 code)自动走批量(`SyncFundBatchWorker`);CLI `scripts_gen/sync_fund_batch.py`。注意:今日盘后数据 tushare 晚间才发布,白天跑可能 0 行属正常。
 
+## GUI 响应性(同步期间不卡)
+
+- **根因**:`_refresh_current_table` 原在主线程直接 `repo.query` + `loadDataFrame`(全量 model reset)。逐 code 同步时每完成一个就触发一次,主线程被 N 次 DB 查询 + 重绘阻塞 → 拖动滚动条无响应。
+- **修复**:`_refresh_current_table` 改为**300ms 单发 timer 防抖**合并同步期间的多次刷新,`_do_refresh_current_table` 用**后台 QueryWorker**查库(`_start_background_refresh`),主线程只在 `_apply_refresh_result` 里 `loadDataFrame`。`_refresh_in_progress`/`_refresh_pending` 保证同一时刻只跑一个查询、完成补刷一次。
+- **table_view 优化**:`setUniformRowHeights(True)` + 固定行高 + ScrollPerPixel,降低 model reset 后的重建开销。
+
 ## 文件导入(importer)识别链路
 
 ```
