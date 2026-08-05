@@ -382,17 +382,21 @@ async def query_macro_generic(
             detail=f"宏观数据表 {table_name} 不存在或不可查询",
         )
 
+    # 带日期参数时绕过缓存（同 /data：先 limit 再过滤，缓存固定切片会裁错日期）
     from src.core.ttl_cache import cache
 
+    use_cache = not (start_date or end_date)
     cache_key = f"macro:{query_name}:{limit}"
-    df = cache.get(cache_key)
+    df = None
+    if use_cache:
+        df = cache.get(cache_key)
     if df is None:
         try:
             df = repo.query(query_name, limit=limit)
         except Exception:
             # 白名单内的表可能尚未同步（库中还没有该表），优雅返回空
             return DataResponse(data=[], total=0, message=f"表 {table_name} 暂无数据")
-        if len(df) <= 100_000:
+        if use_cache and len(df) <= 100_000:
             cache.set(cache_key, df)
 
     if not df.empty:
@@ -420,6 +424,16 @@ async def query_macro_generic(
 async def list_indicators(repo=Depends(get_repo)):
     """列出全部指标映射（indicator → 获信源表 + 列映射）"""
     return DataResponse(data=repo.list_indicators(), total=len(repo.list_indicators()))
+
+
+def _ymd_to_iso(value: str | None) -> str | None:
+    """YYYYMMDD → YYYY-MM-DD（SQL 侧日期比较用，库内 TEXT 为 ISO 格式）"""
+    if not value:
+        return None
+    v = str(value).strip()
+    if len(v) == 8 and v.isdigit():
+        return f"{v[:4]}-{v[4:6]}-{v[6:]}"
+    return v
 
 
 def _df_to_json_records(df, limit: int | None = None) -> list[dict]:
@@ -615,16 +629,25 @@ async def query_data_table(
     except Exception:
         pass
 
+    # 查询：带日期参数时把区间过滤下沉到 SQL（用日期索引，避免「先 limit 再
+    # pandas 过滤」在大表上把目标日期裁掉）；无日期参数走缓存（固定 limit 切片）。
     from src.core.ttl_cache import cache
 
+    use_cache = not (start_date or end_date)
     cache_key = f"data:{table_name}:{limit}"
-    df = cache.get(cache_key)
+    df = None
+    if use_cache:
+        df = cache.get(cache_key)
     if df is None:
         try:
-            df = repo.query(table_name, limit=limit)
+            df = repo.query(
+                table_name, limit=limit,
+                date_from=_ymd_to_iso(start_date),
+                date_to=_ymd_to_iso(end_date),
+            )
         except Exception:
             raise HTTPException(status_code=500, detail=f"查询表 {table_name} 失败")
-        if len(df) <= 100_000:
+        if use_cache and len(df) <= 100_000:
             cache.set(cache_key, df)
 
     # 字段选择
@@ -635,7 +658,7 @@ async def query_data_table(
         if keep:
             df = df[keep]
 
-    # 日期区间过滤
+    # 日期区间过滤（SQL 已过滤时此步是幂等兜底）
     df = _filter_by_date_range(df, start_date, end_date)
 
     # 按日期列倒序（最新在前）
