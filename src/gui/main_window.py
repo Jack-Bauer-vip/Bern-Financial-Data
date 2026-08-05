@@ -162,6 +162,25 @@ class SyncAllWorker(QObject):
             self.finished.emit()
 
 
+class SyncFundBatchWorker(QObject):
+    """基金日线批量同步工作器 — 按交易日补全市场（替代逐个 code）"""
+
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, sync_engine: SyncEngine):
+        super().__init__()
+        self.sync_engine = sync_engine
+
+    def run(self) -> None:
+        try:
+            self.sync_engine.run_fund_daily_batch()
+        except Exception as exc:
+            self.error.emit(str(exc))
+        finally:
+            self.finished.emit()
+
+
 class QueryWorker(QObject):
     """后台查询工作器 — 只查数据库"""
 
@@ -1278,6 +1297,13 @@ class MainWindow(QMainWindow):
                 return
             source_keys = [current]
 
+        # ★ 基金日线源 + 未选具体 code → 走批量（按交易日补全市场，一次调用
+        #   返回全市场 ~2000 只，替代逐个 code 的上千次调用，提速数百倍）
+        if (len(source_keys) == 1 and source_keys[0] == "fund.etf_daily"
+                and not self.param_panel.getSelectedLocalCode()):
+            self._run_fund_daily_batch()
+            return
+
         # 2. 可读名称清单（列表过长时截断显示）
         names = []
         for k in source_keys:
@@ -1369,6 +1395,38 @@ class MainWindow(QMainWindow):
 
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        thread.started.connect(worker.run)
+        thread.start()
+        self._threads.append(thread)
+        thread.finished.connect(lambda: self._cleanup_thread(thread))
+
+    def _run_fund_daily_batch(self) -> None:
+        """批量更新基金日线（按交易日补全市场）— 替代逐个 code 的上千次同步"""
+        ret = QMessageBox.question(
+            self,
+            "批量更新基金日线",
+            "将按交易日批量补全市场基金数据（每个交易日一次调用返回全市场，\n"
+            "比逐个基金同步快数百倍，无需逐个等待）。\n\n是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            self.log_widget.write("INFO", "已取消批量更新")
+            return
+
+        self.log_widget.write("INFO", "开始批量更新基金日线（按交易日补全市场）...")
+        thread = QThread(self)
+        worker = SyncFundBatchWorker(self.sync_engine)
+        # ★ 防 GC：worker 局部变量函数返回后被回收，started 连接失效
+        thread._worker_ref = worker
+        worker.moveToThread(thread)
+
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(
+            lambda err: self.log_widget.write("ERROR", f"批量更新失败: {err}"))
         thread.finished.connect(thread.deleteLater)
 
         thread.started.connect(worker.run)

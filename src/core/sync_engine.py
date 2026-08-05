@@ -423,6 +423,123 @@ class SyncEngine(QObject):
             self._running = False
 
     # ------------------------------------------------------------------
+    # 基金批量同步（按交易日补全市场）
+    #
+    # 问题：fund_etf_daily 逐个 code 同步时每次调用 2.2s（含硬编码睡眠），
+    # 上千只基金要 ~37 分钟。而 tushare fund_daily(trade_date=) 一次调用
+    # 返回当天全市场 ~2000 只基金。故改为按交易日批量：从表内最大日期+1
+    # 到今天，逐交易日拉全市场，重命名列后 bulk_upsert。补 N 天只需 N 次调用。
+    # ------------------------------------------------------------------
+
+    def run_fund_daily_batch(self) -> int:
+        """按交易日批量补基金日线（全市场入库），返回写入行数
+
+        增量起点：fund_etf_daily 表内全局最大日期 + 1（首次无数据则补近 1 年）。
+        用 tushare trade_cal 拿交易日，逐日 fund_daily(trade_date=) 全市场拉取。
+        """
+        table_name = "fund_etf_daily"
+        pro = self.fetcher.tushare_pro
+        if pro is None:
+            raise DataFetchError("tushare 不可用（token 未配置或初始化失败）")
+
+        # 增量起点
+        max_date = self.repo.get_last_date(table_name, "date")
+        if max_date is None:
+            start = date.today() - timedelta(days=365)
+            self._log("INFO", "[基金批量] 表内无数据，首次回补近 1 年")
+        else:
+            start = max_date + timedelta(days=1)
+            self._log("INFO", f"[基金批量] 表内最大日期 {max_date.isoformat()}，增量起点 {start.isoformat()}")
+        end = date.today()
+        if start > end:
+            self._log("INFO", f"[基金批量] 数据已到 {max_date}，无需批量更新")
+            return 0
+
+        # 交易日历
+        try:
+            cal = pro.trade_cal(
+                exchange="SSE",
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+                is_open="1",
+            )
+            trade_days = sorted(cal["cal_date"].tolist())
+        except Exception as exc:
+            raise DataFetchError(f"获取交易日历失败: {exc}")
+        if not trade_days:
+            self._log("INFO", f"[基金批量] {start}~{end} 区间无交易日")
+            return 0
+
+        self._log("INFO", f"[基金批量] 待补 {len(trade_days)} 个交易日: {trade_days}")
+        self.sync_started.emit("fund.etf_daily")
+
+        total = 0
+        failed = 0
+        for d in trade_days:
+            try:
+                df = pro.fund_daily(trade_date=d)
+            except Exception as exc:
+                failed += 1
+                self._log("WARNING", f"[基金批量] {d} 拉取失败: {exc}")
+                continue
+            if df is None or df.empty:
+                continue
+            df = self._prepare_fund_batch_df(df)
+            self.schema_mgr.ensure_columns(table_name, list(df.columns))
+            df = SyncEngine._clean_data(df)
+            added = self.repo.bulk_upsert(
+                table_name, df, unique_columns=["code", "date"],
+                batch_size=self.config.get("sync.batch_size", 500))
+            total += added
+            self._log("INFO", f"[基金批量] {d}: 全市场 {len(df)} 行，写入 {added} 行")
+            # 温和间隔，防限流（tushare 实测 ~150次/分，逐日 N 次完全安全）
+            time.sleep(random.uniform(0.3, 0.8))
+
+        # 更新同步任务状态
+        last_date = self.repo.get_last_date(table_name, "date")
+        row_count = self.repo.count_rows(table_name)
+        self.repo.update_sync_job(table_name, {
+            "display_name": "ETF基金日线",
+            "category": "基金",
+            "api_source": "tushare",
+            "api_function": "fund_daily",
+            "last_sync_time": datetime.now(),
+            "last_sync_date": last_date,
+            "row_count": row_count,
+            "status": "completed",
+            "error_message": None,
+            "enabled": True,
+        })
+
+        # 清查询缓存
+        try:
+            from src.core.ttl_cache import cache
+            cache.clear()
+        except Exception:
+            pass
+
+        self._log("INFO", f"[基金批量] 完成，共写入 {total} 行（失败 {failed} 个交易日）")
+        self.sync_completed.emit("fund.etf_daily", total)
+        return total
+
+    @staticmethod
+    def _prepare_fund_batch_df(df: pd.DataFrame) -> pd.DataFrame:
+        """tushare fund_daily 全市场返回 → 目标表规范列
+
+        ts_code→code（去交易所后缀）、trade_date→date、vol→volume；
+        丢弃 pre_close/change/pct_chg 等目标表没有的列，date 转 ISO。
+        """
+        df = df.rename(columns={"ts_code": "code", "trade_date": "date", "vol": "volume"})
+        if "code" in df.columns:
+            df["code"] = df["code"].map(_strip_exchange)
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(
+                df["date"], format="%Y%m%d", errors="coerce").dt.strftime("%Y-%m-%d")
+        keep = ["date", "open", "high", "low", "close", "volume", "amount", "code"]
+        keep = [c for c in keep if c in df.columns]
+        return df[keep]
+
+    # ------------------------------------------------------------------
     # 批量同步
     # ------------------------------------------------------------------
 

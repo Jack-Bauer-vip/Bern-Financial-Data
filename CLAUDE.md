@@ -24,6 +24,7 @@ python scripts_gen/gen_report.py --date 2026-08-04   # 日报 PDF
 python scripts_gen/check_freshness.py --only-stale   # 数据新鲜度(退出码 1=有停更)
 python scripts_gen/ensure_indexes.py                 # 为 catalog 表建普通索引(幂等)
 python scripts_gen/migrate_index_daily.py            # 一次性修复 index_daily(2014→今)
+python scripts_gen/sync_fund_batch.py                # 基金日线批量同步(按交易日补全市场)
 ```
 
 - 本地 API:`http://127.0.0.1:8765`,Swagger 在 `/docs`。鉴权用 `X-API-Key` 头(非 URL token),`.env` 配 `API_TOKEN`,留空则不鉴权。
@@ -92,6 +93,7 @@ SyncEngine.run(source_key)                               │  同步/导入/抓�
 - **指标派生视图**:`GET /api/v1/indicator/{key}?transform=level|yoy|mom|pct`。`src/core/transform.py` 按日期中位间隔推断频率,yoy/mom 百分比;transform!=level 时先拉全量再算(避免 limit 截断同比前值)。pct=mom 别名。原值(ODS)永不改,只派生。
 - **内存 TTL 缓存**:`src/core/ttl_cache.py` 进程内缓存 `/indicator`/`/macro`/`/data`(无日期时)。**失效单点**在 `SyncEngine.run()` 成功分支(GUI/全量/定时/API 四路都汇聚于此)。带日期参数时 /data 把区间过滤下沉 SQL(用 `ensure_index` 建的 date+code 复合索引),绕过缓存避免大表「先 limit 再过滤」裁错日期。
 - **新鲜度**:`src/core/freshness.py` 纯函数(从 health_dialog 拆出),供 GUI 对话框/`/health`(返回 stale_sources/stale_count,排除 deprecated)/CLI `check_freshness.py` 三方共用。CLI 可配 webhook(env `FRESHNESS_WEBHOOK_URL`,钉钉/飞书/Server酱 通用)。
+- **基金日线批量同步**:`SyncEngine.run_fund_daily_batch()`。fund_etf_daily 逐个 code 同步每次 2.2s(两段硬编码睡眠)、1000 只 ~37min;改为**按交易日批量**——tushare `fund_daily(trade_date=)` 一次返回当天全市场 ~2000 只,从表内最大日期+1 到今天逐交易日拉取,补 N 天只需 N 次调用。全市场入库(不限于库内已有 code)。GUI 同步「ETF基金日线」时(未选具体 code)自动走批量(`SyncFundBatchWorker`);CLI `scripts_gen/sync_fund_batch.py`。注意:今日盘后数据 tushare 晚间才发布,白天跑可能 0 行属正常。
 
 ## 文件导入(importer)识别链路
 
