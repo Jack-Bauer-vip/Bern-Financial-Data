@@ -78,9 +78,20 @@ class FetcherRegistry:
         """根据 source_key 返回完整数据源配置"""
         return self._flat_sources.get(source_key)
 
-    def get_all_sources(self) -> list[dict]:
-        """返回所有已注册的数据源列表"""
-        return list(self._flat_sources.values())
+    def get_all_sources(self, include_deprecated: bool = True) -> list[dict]:
+        """返回所有已注册的数据源列表
+
+        include_deprecated=True（默认）包含 deprecated 源，供 /sources 标注
+        data_status；False 则排除（供候选收集/import 匹配）。
+        """
+        sources = list(self._flat_sources.values())
+        if include_deprecated:
+            return sources
+        return [s for s in sources if not s.get("deprecated")]
+
+    def get_all_enabled_sources(self) -> list[dict]:
+        """返回可同步的数据源（排除 deprecated）——供 run_all / 候选收集"""
+        return self.get_all_sources(include_deprecated=False)
 
     def get_macro_sources(self) -> list[dict]:
         """返回分类路径中包含 'macro' 的宏观数据源"""

@@ -88,7 +88,7 @@ def record_request(client_ip: str, user_agent: str, path: str):
 
 @router.get("/health", response_model=HealthResponse, tags=["系统"])
 async def health_check(repo=Depends(get_repo)):
-    """系统健康状态"""
+    """系统健康状态（含数据新鲜度——滞后/停更源列表，不含 deprecated）"""
     try:
         row_count = repo.count_rows("meta_sync_jobs")
     except Exception:
@@ -96,11 +96,31 @@ async def health_check(repo=Depends(get_repo)):
 
     scheduler_running = bool(_scheduler and _scheduler.is_running())
 
+    stale_list: list[dict] = []
+    try:
+        from src.core.freshness import collect_source_freshness
+        from src.core.fetcher_registry import FetcherRegistry
+        from src.utils.config import ConfigManager
+        registry = FetcherRegistry(ConfigManager())
+        for f in collect_source_freshness(repo, registry):
+            if f.status_label != "✅ 正常":
+                stale_list.append({
+                    "source_key": f.source_key,
+                    "name": f.name,
+                    "status": f.status_label,
+                    "last_date": f.last_date.isoformat() if f.last_date else None,
+                    "days_since": f.days_since,
+                })
+    except Exception:
+        pass
+
     return HealthResponse(
         status="ok",
         timestamp=datetime.now().isoformat(),
         db_rows=row_count,
         scheduler_running=scheduler_running,
+        stale_sources=stale_list,
+        stale_count=len(stale_list),
     )
 
 
@@ -147,6 +167,7 @@ async def list_sources(repo=Depends(get_repo)):
             "api_function": s.get("api_function", ""),
             "table_name": s.get("table_name", ""),
             "has_incremental": s.get("has_incremental", False),
+            "data_status": "deprecated" if s.get("deprecated") else "active",
         } for s in all_src],
         total=len(all_src),
     )
@@ -295,7 +316,7 @@ async def query_cpi(
                 combined = combined.sort_values(by=_col, ascending=False)
                 break
     total = len(combined)
-    data = combined.head(limit).to_dict(orient="records")
+    data = _df_to_json_records(combined, limit)
 
     return DataResponse(data=data, total=total)
 
@@ -361,11 +382,18 @@ async def query_macro_generic(
             detail=f"宏观数据表 {table_name} 不存在或不可查询",
         )
 
-    try:
-        df = repo.query(query_name, limit=limit)
-    except Exception:
-        # 白名单内的表可能尚未同步（库中还没有该表），优雅返回空
-        return DataResponse(data=[], total=0, message=f"表 {table_name} 暂无数据")
+    from src.core.ttl_cache import cache
+
+    cache_key = f"macro:{query_name}:{limit}"
+    df = cache.get(cache_key)
+    if df is None:
+        try:
+            df = repo.query(query_name, limit=limit)
+        except Exception:
+            # 白名单内的表可能尚未同步（库中还没有该表），优雅返回空
+            return DataResponse(data=[], total=0, message=f"表 {table_name} 暂无数据")
+        if len(df) <= 100_000:
+            cache.set(cache_key, df)
 
     if not df.empty:
         # 日期区间过滤
@@ -378,7 +406,7 @@ async def query_macro_generic(
                     break
 
     return DataResponse(
-        data=df.to_dict(orient="records") if not df.empty else [],
+        data=_df_to_json_records(df) if not df.empty else [],
         total=len(df),
     )
 
@@ -394,9 +422,48 @@ async def list_indicators(repo=Depends(get_repo)):
     return DataResponse(data=repo.list_indicators(), total=len(repo.list_indicators()))
 
 
+def _df_to_json_records(df, limit: int | None = None) -> list[dict]:
+    """DataFrame → records，NaN/NaT→None、Timestamp/date→ISO 字符串
+
+    Starlette JSONResponse 用 json.dumps(allow_nan=False)，NaN/Inf 直接序列化
+    会 500；pd.Timestamp/pd.NaT 混入 record 还会触发 pydantic 对 list[dict] 的
+    序列化异常（dict 结构不一致时）。统一清洗成 JSON 安全类型：
+    None / NaN / NaT → None；Timestamp/date/datetime → ISO 日期字符串。
+    """
+    import pandas as pd
+
+    if df is None or df.empty:
+        return []
+    data = df.head(limit) if limit is not None else df
+    out = []
+    for rec in data.to_dict(orient="records"):
+        cleaned = {}
+        for k, v in rec.items():
+            if v is None:
+                cleaned[k] = None
+            elif isinstance(v, pd.Timestamp):
+                cleaned[k] = None if pd.isna(v) else v.isoformat()[:10]
+            elif isinstance(v, (datetime,)):
+                # pd.NaT 是 datetime 子类，其 isoformat() 返回 "NaT"，先判缺失
+                cleaned[k] = None if pd.isna(v) else v.isoformat()[:10]
+            elif isinstance(v, float) and pd.isna(v):
+                cleaned[k] = None
+            else:
+                # 兜底：pd.NaT 等其它 pandas 标量缺失值
+                try:
+                    r = pd.isna(v)
+                    cleaned[k] = None if isinstance(r, bool) and r else v
+                except Exception:
+                    cleaned[k] = v
+        out.append(cleaned)
+    return out
+
+
 @router.get("/indicator/{indicator_key}", tags=["指标"])
 async def get_indicator(
     indicator_key: str,
+    transform: str = Query(None, pattern=r"^(level|yoy|mom|pct)$",
+                           description="派生视图：level 原始(默认) | yoy 同比% | mom 环比% | pct=环比别名"),
     start_date: str = Query(None, pattern=r"^\d{8}$"),
     end_date: str = Query(None, pattern=r"^\d{8}$"),
     limit: int = Query(5000, le=100000),
@@ -405,14 +472,32 @@ async def get_indicator(
     """统一查询指标（按获信源表），返回 {date, value}
 
     指标键如 us.unemployment、us.cpi。无获信映射 → 空。
-    日期区间用 _filter_by_date_range 处理（start/end 为 YYYYMMDD，与
-    /macro/{table_name} 一致；get_indicator 先返回全量再在此过滤）。
+    transform!=level 时**先拉全量再算派生**（同比首行需一年前前值，直接套
+    limit 会截断历史），再做日期过滤，最后降序 + head(limit)。
+    缓存原始 {date,value}（同步成功后由 SyncEngine 单点失效）。
     """
-    df = repo.get_indicator(indicator_key, limit=limit)
+    from src.core.ttl_cache import cache
+
+    cache_key = f"ind:{indicator_key}"
+    df = cache.get(cache_key)
+    if df is None:
+        df = repo.get_indicator(indicator_key)  # 全量，供派生对齐前值/级别限制
+        if len(df) <= 100_000:
+            cache.set(cache_key, df)
+
+    if df.empty:
+        return DataResponse(data=[], total=0, source=f"indicator:{indicator_key}")
+
+    if transform and transform != "level":
+        from src.core.transform import compute_transform
+        df = compute_transform(df, transform)
+
     if not df.empty:
         df = _filter_by_date_range(df, start_date, end_date)
+        df = df.sort_values("date", ascending=False).reset_index(drop=True)
+
     return DataResponse(
-        data=df.to_dict(orient="records") if not df.empty else [],
+        data=_df_to_json_records(df, limit),
         total=len(df),
         source=f"indicator:{indicator_key}",
     )
@@ -499,7 +584,7 @@ async def query_data_table(
     table_name: str,
     start_date: str = Query(None, pattern=r"^\d{8}$"),
     end_date: str = Query(None, pattern=r"^\d{8}$"),
-    limit: int = Query(500, le=100000),
+    limit: int = Query(200, le=100000),
     fields: str = Query(None, description="逗号分隔的字段列表"),
     repo=Depends(get_repo),
 ):
@@ -507,6 +592,8 @@ async def query_data_table(
 
     按表名查询任意数据表，支持日期区间、字段选择、行数限制。
     表名必须存在于候选集合（防注入）。
+    data_status：catalog 源 active/deprecated；非 catalog 导入表 local。
+    未传日期区间时默认只返回 limit 条并提示（大表建议带 start_date/end_date）。
     """
     # 表名白名单校验（防注入）
     valid = _valid_table_names(repo)
@@ -516,10 +603,29 @@ async def query_data_table(
             detail=f"数据表 {table_name} 不存在或不可查询，可用表见 /data/tables",
         )
 
+    # data_status：从 catalog 查表归属；非 catalog 表（CSV 导入等）→ local
+    data_status = "local"
     try:
-        df = repo.query(table_name, limit=limit)
+        from src.core.fetcher_registry import FetcherRegistry
+        from src.utils.config import ConfigManager
+        for s in FetcherRegistry(ConfigManager()).get_all_sources():
+            if s.get("table_name") == table_name:
+                data_status = "deprecated" if s.get("deprecated") else "active"
+                break
     except Exception:
-        raise HTTPException(status_code=500, detail=f"查询表 {table_name} 失败")
+        pass
+
+    from src.core.ttl_cache import cache
+
+    cache_key = f"data:{table_name}:{limit}"
+    df = cache.get(cache_key)
+    if df is None:
+        try:
+            df = repo.query(table_name, limit=limit)
+        except Exception:
+            raise HTTPException(status_code=500, detail=f"查询表 {table_name} 失败")
+        if len(df) <= 100_000:
+            cache.set(cache_key, df)
 
     # 字段选择
     if fields:
@@ -539,9 +645,16 @@ async def query_data_table(
                 df = df.sort_values(by=_col, ascending=False)
                 break
 
+    message = "ok"
+    if not start_date and not end_date and len(df) >= limit:
+        message = ("未指定日期区间，仅返回前 %d 条；建议带 start_date/end_date"
+                   "（YYYYMMDD）以提升性能与精确性" % limit)
+
     return DataResponse(
-        data=df.to_dict(orient="records") if not df.empty else [],
+        data=_df_to_json_records(df) if not df.empty else [],
         total=len(df),
+        message=message,
+        data_status=data_status,
     )
 
 

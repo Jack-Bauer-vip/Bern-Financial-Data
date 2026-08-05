@@ -93,6 +93,10 @@ class DataScheduler:
         schedule_cron = category.get("schedule_cron")
         schedule_enabled = category.get("schedule_enabled")
 
+        # ★ 已标记 deprecated 的数据源不再注册定时任务（避免继续拉已停更的源）
+        if category.get("deprecated"):
+            return
+
         # 记住顶级分类名
         if top_category_name is None and not children:
             top_category_name = name

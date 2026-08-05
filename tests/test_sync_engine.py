@@ -48,6 +48,32 @@ def test_clean_data_iso_untouched():
                                     pd.Timestamp("2008-02-01").date()]
 
 
+@pytest.mark.parametrize("raw,expected", [
+    ("2009第4季度", "2009-12-01"),
+    ("2009年第4季度", "2009-12-01"),
+    ("2009年第四季度", "2009-12-01"),
+    ("2009Q4", "2009-12-01"),
+    ("2009年1季度", "2009-03-01"),
+    ("2009第1季度", "2009-03-01"),
+])
+def test_clean_data_normalizes_quarter(raw, expected):
+    """季度格式 → 季度末月（3/6/9/12）"""
+    df = pd.DataFrame({"时间": [raw], "现值": [100.0]})
+    out = SyncEngine._clean_data(df)
+    assert out["时间"].tolist() == [pd.Timestamp(expected).date()]
+    assert len(out) == 1
+
+
+def test_clean_data_quarter_non_iso_string():
+    """_normalize_cn_date_str 对季度串产出可解析的 ISO 前缀"""
+    assert SyncEngine._normalize_cn_date_str("2009第4季度") == "2009-12"
+    assert SyncEngine._normalize_cn_date_str("2009年1季度") == "2009-03"
+    assert SyncEngine._normalize_cn_date_str("2009Q2") == "2009-06"
+    # 无季度/中文日期字样 → 原样
+    assert SyncEngine._normalize_cn_date_str("plain-text") == "plain-text"
+    assert SyncEngine._normalize_cn_date_str(12345) == 12345
+
+
 def test_clean_data_drops_unparseable_rows():
     """无法解析的日期行被丢弃而非保留 NaT"""
     df = pd.DataFrame({
@@ -100,3 +126,61 @@ def test_bulk_upsert_handles_nat_in_date_column(repo):
     })
     n = repo.bulk_upsert("macro_test", df, unique_columns=["date"])
     assert n == 2
+
+
+def test_bulk_upsert_handles_float_nan(repo):
+    """float 列含 NaN 不再崩库（NaN → NULL 写入）
+
+    pandas 3.x 下 float64 列 .where(None) 会把 None 强转回 nan，
+    需先 astype(object)（回归：旧实现此用例红）。
+    """
+    df = pd.DataFrame({
+        "date": ["2026-01-01", "2026-01-02"],
+        "value": [float("nan"), 4.2],
+    })
+    n = repo.bulk_upsert("macro_test", df, unique_columns=["date"])
+    assert n == 2
+    rows = repo.query("macro_test").to_dict(orient="records")
+    # NULL 读回为 NaN；若误存成字面量 "nan" 则 pd.isna 为 False，可区分
+    assert pd.isna(rows[0]["value"])
+
+
+def test_bulk_upsert_handles_string_pdna(repo):
+    """pandas 3.x str dtype 列含 pd.NA → NULL 写入（NAType 不崩库）"""
+    df = pd.DataFrame({
+        "date": ["2026-01-01", "2026-01-02"],
+        "value": pd.Series([pd.NA, "4.2"], dtype="string"),
+    })
+    n = repo.bulk_upsert("macro_test", df, unique_columns=["date"])
+    assert n == 2
+    rows = repo.query("macro_test").to_dict(orient="records")
+    assert pd.isna(rows[0]["value"])
+
+
+def test_bulk_upsert_object_nat(repo):
+    """object 列含 pd.NaT / np.nan → NULL 写入"""
+    import numpy as np
+    df = pd.DataFrame({
+        "date": ["2026-01-01", "2026-01-02"],
+        "value": [pd.NaT, np.nan],
+    })
+    n = repo.bulk_upsert("macro_test", df, unique_columns=["date"])
+    assert n == 2
+
+
+def test_ensure_index_creates_non_unique(repo):
+    """ensure_index 创建普通非唯一索引（幂等）"""
+    from sqlalchemy import text
+    assert repo.ensure_index("macro_test", ["date"]) is True
+    assert repo.ensure_index("macro_test", ["date"]) is True  # 幂等
+    with repo.engine.connect() as conn:
+        n = conn.execute(text(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' "
+            "AND name='idx_macro_test_date'"
+        )).scalar()
+    assert n == 1
+
+
+def test_ensure_index_missing_column_false(repo):
+    """表中无该列 → 返回 False（不建索引）"""
+    assert repo.ensure_index("macro_test", ["symbol"]) is False

@@ -18,6 +18,7 @@ class DataResponse(BaseModel):
     data: list[dict] = []
     total: int = 0
     source: str = "local_db"
+    data_status: str = "active"  # active / deprecated / local
 
 
 class ErrorResponse(BaseModel):
@@ -38,6 +39,8 @@ class HealthResponse(BaseModel):
     timestamp: str
     db_rows: int = 0
     scheduler_running: bool = False
+    stale_sources: list[dict] = []  # 滞后/停更的数据源（不含 deprecated）
+    stale_count: int = 0
 
 
 # ---------------------------------------------------------------------------

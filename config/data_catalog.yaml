@@ -55,6 +55,7 @@ categories:
       table_name: macro_usa_ism_pmi
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），无 FRED 替代，保留历史
     - name: 美国ISM非制造业PMI
       source_key: macro.us.ism_non_pmi
       api_source: akshare
@@ -62,6 +63,7 @@ categories:
       table_name: macro_usa_ism_non_pmi
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），无 FRED 替代，保留历史
     - name: 美国零售销售
       source_key: macro.us.retail_sales
       api_source: akshare
@@ -85,6 +87,7 @@ categories:
       table_name: macro_usa_cb_consumer_confidence
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-08），无 FRED 替代，保留历史
     - name: 美国PPI
       source_key: macro.us.ppi
       api_source: akshare
@@ -172,6 +175,7 @@ categories:
       table_name: macro_usa_nfib_small_business
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），无 FRED 替代，保留历史
     - name: 美国30年期国债收益率
       source_key: macro.us.bond_yield_30y
       api_source: akshare

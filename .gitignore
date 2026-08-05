@@ -10,6 +10,10 @@ data/*.db-wal
 data/*.db-shm
 data/schedule_state.json
 data/logs/
+data/cache/
+data/export/
+# 导入表头记忆模板（运行期自动学习，可重建）
+data/header_templates.json
 
 # ---- Python ----
 __pycache__/

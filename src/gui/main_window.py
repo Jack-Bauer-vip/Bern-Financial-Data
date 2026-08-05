@@ -1343,9 +1343,24 @@ class MainWindow(QMainWindow):
         thread.finished.connect(lambda: self._cleanup_thread(thread))
 
     def on_sync_all(self) -> None:
-        """同步所有启用的数据源"""
-        self.log_widget.write("INFO", "开始全量同步...")
+        """同步所有启用的数据源（含二次确认，防误触；run_all 顺序执行+每源锁）"""
+        try:
+            n = len(self.repo.get_all_enabled_sources())
+        except Exception:
+            n = 0
+        ret = QMessageBox.question(
+            self,
+            "确认全量同步",
+            f"将顺序同步全部 {n} 个启用数据源（不含已弃用源）。\n\n"
+            "可能耗时较长，可中途停止。是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            self.log_widget.write("INFO", "已取消全量同步")
+            return
 
+        self.log_widget.write("INFO", f"开始全量同步 {n} 个数据源...")
         thread = QThread(self)
         worker = SyncAllWorker(self.sync_engine)
         # ★ 防 GC：worker 局部变量函数返回后被回收，started 连接失效

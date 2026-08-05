@@ -77,24 +77,14 @@ class DataRepository:
         return _search(categories)
 
     def get_all_enabled_sources(self) -> list[dict]:
-        """遍历 data_catalog.yaml 收集所有启用的数据源叶节点"""
-        config = ConfigManager()
-        catalog = config.catalog
-        categories = catalog.get("categories", [])
+        """收集可同步的数据源叶节点（排除 deprecated）
 
-        sources: list[dict] = []
-
-        def _collect(nodes: list) -> None:
-            for node in nodes:
-                children = node.get("children")
-                if children:
-                    _collect(children)
-                elif node.get("api_source") and node.get("table_name"):
-                    # 叶节点
-                    sources.append(dict(node))
-
-        _collect(categories)
-        return sources
+        委托 FetcherRegistry（唯一 canonical 遍历），避免与 fetcher_registry
+        的拍平逻辑分叉导致 deprecated 源仍被 run_all 同步。
+        """
+        from src.core.fetcher_registry import FetcherRegistry
+        from src.utils.config import ConfigManager
+        return FetcherRegistry(ConfigManager()).get_all_enabled_sources()
 
     # ------------------------------------------------------------------
     # 指标归一层（meta_indicator）
@@ -549,6 +539,37 @@ class DataRepository:
                 return False
 
     # ------------------------------------------------------------------
+    # 普通索引（非唯一）— 加速 /data 等通用查询
+    # ------------------------------------------------------------------
+
+    def ensure_index(self, table_name: str, columns: list[str]) -> bool:
+        """创建非唯一普通索引（如 date 或 date+code），加速通用查询
+
+        逻辑列名经 resolve_date_columns 解析（日期列归一化、缺失列丢弃）；
+        无有效列返回 False。SQLite TEXT 列建普通索引即可提速范围过滤。
+        """
+        if not columns or not self.table_exists(table_name):
+            return False
+        cols = self.resolve_date_columns(table_name, columns)
+        if not cols:
+            return False
+        safe = table_name.replace('"', "").replace(".", "_")
+        idx_name = "idx_" + safe + "_" + "_".join(
+            c.replace('"', "").replace(".", "_") for c in cols)
+        cols_sql = ", ".join(self._quote_column(c) for c in cols)
+        sql = (f"CREATE INDEX IF NOT EXISTS {self._quote_column(idx_name)} "
+               f"ON {self._quote_table(table_name)} ({cols_sql})")
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(text(sql))
+                conn.commit()
+            logger.info("已创建普通索引 %s (%s)", idx_name, ", ".join(cols))
+            return True
+        except Exception as exc:
+            logger.warning("创建普通索引 %s 失败: %s", idx_name, exc)
+            return False
+
+    # ------------------------------------------------------------------
     # 批量写入
     # ------------------------------------------------------------------
 
@@ -583,7 +604,9 @@ class DataRepository:
 
         # 防御：把 pandas 的 NaT/NaN/NA 转成 None，避免 SQLite 无法绑定
         # （同步/导入/抓取等路径的数据都可能带缺失值，NaT 尤其常见于日期列）
-        df = df.where(pd.notnull(df), None)
+        # pandas 3.x 下 .where(mask, None) 对 datetime64/float/str(含 pd.NA)
+        # 列会把 None 强转回 NaT/nan/NA，故先对含缺失的列整体 astype(object)
+        df = self._sanitize_for_sql(df)
 
         # 解析唯一键到表内真实列（如 date -> 时间）
         unique_cols = self.resolve_date_columns(table_name, unique_columns or [])
@@ -990,6 +1013,24 @@ class DataRepository:
         """SQLite-safe 双引号表名"""
         safe = name.replace("\"", "\"\"")
         return f'"{safe}"'
+
+    @staticmethod
+    def _sanitize_for_sql(df: pd.DataFrame) -> pd.DataFrame:
+        """NaT/NaN/NA → None，适配 SQLite TEXT 绑参（防 NaTType/NAType 崩溃）
+
+        只处理含缺失值的列（快路径不 copy）；这些列先整体 astype(object) 再
+        .where(mask, None)——pandas 3.x 下若保持 datetime64/float/str dtype，
+        None 会被强转回 NaT/nan/NA，只有 object 列收得住 None。
+        """
+        if df is None or df.empty:
+            return df
+        missing = [c for c in df.columns if df[c].isna().any()]
+        if not missing:
+            return df
+        df = df.copy()
+        for c in missing:
+            df[c] = df[c].astype(object)
+        return df.where(pd.notnull(df), None)
 
     @staticmethod
     def _quote_column(name: str) -> str:

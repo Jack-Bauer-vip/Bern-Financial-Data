@@ -99,10 +99,11 @@ def test_sources(client):
 
 
 def _first_date(rec) -> str:
-    """从一条记录中取日期字符串（兼容多列名）"""
+    """从一条记录中取日期字符串（兼容多列名）；跳过 None/NaT 的列"""
     for col in ("时间", "日期", "date"):
-        if col in rec:
-            return str(rec[col])[:10]
+        v = rec.get(col)
+        if v not in (None, "NaT", ""):
+            return str(v)[:10]
     return ""
 
 
@@ -262,6 +263,81 @@ def client_with_token():
 def test_auth_missing_token_401(client_with_token):
     r = client_with_token.get("/api/v1/data/tables")
     assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# data_status（deprecated 源标注）
+# ---------------------------------------------------------------------------
+
+
+def test_sources_have_data_status(client):
+    """/sources 每个源带 data_status，4 个 deprecated 源标记正确"""
+    r = client.get("/api/v1/sources")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] > 0
+    by_key = {s["source_key"]: s for s in body["data"]}
+    assert all("data_status" in s for s in body["data"])
+    for key in ("macro.us.ism_pmi", "macro.us.ism_non_pmi",
+                "macro.us.cb_consumer_confidence",
+                "macro.us.nfib_small_business"):
+        assert by_key.get(key, {}).get("data_status") == "deprecated"
+
+
+def test_data_endpoint_data_status_deprecated(client):
+    """/data 对 deprecated 表返回 data_status=deprecated"""
+    r = client.get("/api/v1/data/macro_usa_ism_pmi", params={"limit": 5})
+    assert r.status_code == 200
+    assert r.json()["data_status"] == "deprecated"
+
+
+def test_data_endpoint_data_status_active(client):
+    """/data 对正常源返回 data_status=active"""
+    r = client.get("/api/v1/data/macro_usa_cpi_yoy", params={"limit": 5})
+    assert r.status_code == 200
+    assert r.json()["data_status"] == "active"
+
+
+def test_health_has_stale_sources(client):
+    """/health 含 stale_sources 且不含 deprecated 源"""
+    r = client.get("/api/v1/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert "stale_sources" in body and "stale_count" in body
+    # 兼容旧字段仍在
+    assert body["status"] == "ok"
+    assert "db_rows" in body
+    # deprecated 源（ism_pmi 等）不应出现在 stale_sources（避免假"停更"）
+    dep_keys = {"macro.us.ism_pmi", "macro.us.ism_non_pmi",
+                "macro.us.cb_consumer_confidence",
+                "macro.us.nfib_small_business"}
+    for s in body["stale_sources"]:
+        assert s["source_key"] not in dep_keys
+
+
+# ---------------------------------------------------------------------------
+# indicator transform 派生视图
+# ---------------------------------------------------------------------------
+
+
+def test_indicator_transform_yoy(client):
+    """/indicator 支持 transform=yoy，返回同比序列"""
+    r = client.get("/api/v1/indicator/us.unemployment",
+                   params={"transform": "yoy", "limit": 100})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] >= 0
+    # yoy 返回百分比；检查有值记录均为数值或 null
+    for rec in body["data"]:
+        assert "date" in rec and "value" in rec
+        assert rec["value"] is None or isinstance(rec["value"], (int, float))
+
+
+def test_indicator_transform_invalid(client):
+    """非法 transform 值 → 422"""
+    r = client.get("/api/v1/indicator/us.unemployment",
+                   params={"transform": "bogus"})
+    assert r.status_code == 422
 
 
 def test_auth_wrong_token_401(client_with_token):
