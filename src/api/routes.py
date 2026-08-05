@@ -486,9 +486,9 @@ async def get_indicator(
     """统一查询指标（按获信源表），返回 {date, value}
 
     指标键如 us.unemployment、us.cpi。无获信映射 → 空。
-    transform!=level 时**先拉全量再算派生**（同比首行需一年前前值，直接套
-    limit 会截断历史），再做日期过滤，最后降序 + head(limit)。
-    缓存原始 {date,value}（同步成功后由 SyncEngine 单点失效）。
+    统一经 compute_transform 数值化：**默认(不带 transform 或 level)也 to_numeric
+    返回 float**（此前返回库内 TEXT 字符串，消费端要自己 float()）；yoy/mom/pct
+    为派生视图。缓存原始 {date,value}（同步成功后由 SyncEngine 单点失效）。
     """
     from src.core.ttl_cache import cache
 
@@ -502,9 +502,9 @@ async def get_indicator(
     if df.empty:
         return DataResponse(data=[], total=0, source=f"indicator:{indicator_key}")
 
-    if transform and transform != "level":
-        from src.core.transform import compute_transform
-        df = compute_transform(df, transform)
+    # 统一数值化：默认 level 也 to_numeric → float；yoy/mom/pct 派生
+    from src.core.transform import compute_transform
+    df = compute_transform(df, transform or "level")
 
     if not df.empty:
         df = _filter_by_date_range(df, start_date, end_date)

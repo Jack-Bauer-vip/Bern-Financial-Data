@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Optional
 
+import pandas as pd
+
 
 # Cron 表达式到预期更新间隔（天）的映射
 CRON_TO_EXPECTED_DAYS = {
@@ -29,6 +31,10 @@ CRON_TO_EXPECTED_DAYS = {
 
 DEFAULT_EXPECTED_DAYS = 7  # 默认认为 7 天内算正常
 
+# 由 infer_frequency 推断出的实际数据频率 → 预期更新间隔（天）
+# 日频 2 天 / 周频 9 天 / 月频 32 天 / 季频 95 天 / 年频 370 天（含发布延迟缓冲）
+_FREQ_EXPECTED_DAYS = {"D": 2, "W": 9, "M": 32, "Q": 95, "Y": 370}
+
 
 def get_expected_interval_days(cron: str) -> float:
     """从 cron 表达式推算预期更新间隔（天）"""
@@ -38,12 +44,34 @@ def get_expected_interval_days(cron: str) -> float:
     return CRON_TO_EXPECTED_DAYS.get(cron, DEFAULT_EXPECTED_DAYS)
 
 
+def infer_expected_days_from_dates(
+    dates: "pd.Series",
+) -> float | None:
+    """从日期序列推断实际更新频率对应的预期间隔（天）
+
+    用 transform.infer_frequency 的中位间隔法：月频 → 32 天、季频 → 95 天等。
+    比纯 cron 推断更准确——FRED 月频指标的 cron 是工作日拉取，但数据本身
+    月频发布，按 cron 推断会把正常月频误报为"停更"。
+    无法推断（不足 2 个日期）→ None。
+    """
+    from src.core.transform import infer_frequency
+    if dates is None or len(dates) < 2:
+        return None
+    freq = infer_frequency(dates)
+    if freq is None:
+        return None
+    return _FREQ_EXPECTED_DAYS.get(freq)
+
+
 def get_stale_status(
     last_date: Optional[date],
     cron: str,
     today: date = None,
+    expected_days: float | None = None,
 ) -> tuple[str, str, str]:
     """判断数据源健康状态
+
+    expected_days : 可选，按实际数据频率推算的预期间隔（天）；提供则优先于 cron 推断。
 
     Returns:
         (status_label, status_color_hex, days_since_update_str)
@@ -55,7 +83,7 @@ def get_stale_status(
         return ("未同步", "#888888", "从未同步")
 
     days_since = (today - last_date).days
-    expected_days = get_expected_interval_days(cron)
+    expected_days = expected_days if expected_days is not None else get_expected_interval_days(cron)
     # 松一点：允许 2 倍预期间隔
     stale_threshold = max(expected_days * 2, 3)
 
@@ -118,19 +146,37 @@ def collect_source_freshness(
         except Exception:
             pass
 
+        # 实际数据频率 → 预期间隔（优先于 cron 推断；FRED 月频等 cron 是工作日
+        # 但数据月频发布，按 cron 推断会误报"停更"）
+        expected_days = None
         last_date = None
         if sync_job and sync_job.last_sync_date:
             last_date = sync_job.last_sync_date
-        elif table_name and repo.table_exists(table_name):
+        if table_name and repo.table_exists(table_name):
             try:
-                for _c in ("date", "日期", "时间", "trade_date", "datetime", "月份"):
-                    last_date = repo.get_last_date(table_name, _c)
-                    if last_date is not None:
-                        break
+                cols = repo.get_all_existing_columns(table_name)
+                date_col = next(
+                    (c for c in cols if c.lower() in
+                     ("date", "时间", "日期", "月份", "datetime", "trade_date")),
+                    None)
+                if date_col:
+                    if last_date is None:
+                        last_date = repo.get_last_date(table_name, date_col)
+                    # 取最近 8 个日期推断实际频率
+                    try:
+                        recent = repo.query(
+                            table_name, order_by=f'"{date_col}" DESC', limit=8)
+                        if not recent.empty and date_col in recent.columns:
+                            dates = pd.to_datetime(recent[date_col], errors="coerce")
+                            dates = dates.dropna()
+                            expected_days = infer_expected_days_from_dates(dates)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
-        status_label, status_color, days_text = get_stale_status(last_date, cron, today)
+        status_label, status_color, days_text = get_stale_status(
+            last_date, cron, today, expected_days=expected_days)
         days_since = None
         if last_date is not None:
             days_since = (today - last_date).days

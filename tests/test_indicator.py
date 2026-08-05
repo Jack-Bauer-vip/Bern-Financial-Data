@@ -122,10 +122,14 @@ def test_meta_indicator_excluded_from_data_tables(repo):
 
 
 def test_indicator_candidates(repo):
-    """indicator_candidates 从目录收集同一指标的所有源"""
+    """indicator_candidates 从目录收集同一指标的所有源（deprecated 源排除）
+
+    akshare 美国宏观兜底已标 deprecated（上游停更），不作为获信源候选，
+    只剩 FRED 官方源。
+    """
     cands = repo.indicator_candidates("us.unemployment")
     tables = {c["table_name"] for c in cands}
-    assert tables == {"macro_usa_unemployment_rate", "macro_fred_unemployment"}
+    assert tables == {"macro_fred_unemployment"}
     # 无 indicator 键的指标 → 空
     assert repo.indicator_candidates("us.ism") == []
 

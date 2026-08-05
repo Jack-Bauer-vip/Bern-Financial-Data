@@ -340,6 +340,18 @@ def test_indicator_transform_invalid(client):
     assert r.status_code == 422
 
 
+def test_indicator_default_level_is_numeric(client):
+    """不带 transform 返回 float（而非库内 TEXT 字符串）"""
+    r = client.get("/api/v1/indicator/us.unemployment", params={"limit": 20})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] > 0
+    for rec in body["data"]:
+        if rec["value"] is not None:
+            assert isinstance(rec["value"], (int, float)), \
+                f"value 应为数值, got {type(rec['value'])}: {rec['value']}"
+
+
 def test_auth_wrong_token_401(client_with_token):
     r = client_with_token.get(
         "/api/v1/data/tables", headers={"X-API-Key": "wrong"})

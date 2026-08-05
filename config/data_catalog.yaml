@@ -24,6 +24,7 @@ categories:
       indicator: us.core_cpi
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国GDP
       source_key: macro.us.gdp_monthly
       api_source: akshare
@@ -32,6 +33,7 @@ categories:
       indicator: us.gdp
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国非农就业
       source_key: macro.us.non_farm
       api_source: akshare
@@ -40,6 +42,7 @@ categories:
       indicator: us.non_farm
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国失业率
       source_key: macro.us.unemployment_rate
       api_source: akshare
@@ -48,6 +51,7 @@ categories:
       indicator: us.unemployment
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国ISM制造业PMI
       source_key: macro.us.ism_pmi
       api_source: akshare
@@ -72,6 +76,7 @@ categories:
       indicator: us.retail_sales
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国初请失业金
       source_key: macro.us.initial_jobless
       api_source: akshare
@@ -80,6 +85,7 @@ categories:
       indicator: us.initial_jobless
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国消费者信心
       source_key: macro.us.cb_consumer_confidence
       api_source: akshare
@@ -96,6 +102,7 @@ categories:
       indicator: us.ppi
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国核心PCE
       source_key: macro.us.core_pce_price
       api_source: akshare
@@ -104,6 +111,7 @@ categories:
       indicator: us.core_pce
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-08），已有 FRED 获信源，保留历史
     - name: 美国工厂订单
       source_key: macro.us.factory_orders
       api_source: akshare
@@ -112,6 +120,7 @@ categories:
       indicator: us.factory_orders
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国耐用品订单
       source_key: macro.us.durable_goods_orders
       api_source: akshare
@@ -120,6 +129,7 @@ categories:
       indicator: us.durable_goods
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国贸易帐
       source_key: macro.us.trade_balance
       api_source: akshare
@@ -128,6 +138,7 @@ categories:
       indicator: us.trade_balance
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国工业产出
       source_key: macro.us.industrial_production
       api_source: akshare
@@ -136,6 +147,7 @@ categories:
       indicator: us.industrial_production
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国新屋开工
       source_key: macro.us.house_starts
       api_source: akshare
@@ -144,6 +156,7 @@ categories:
       indicator: us.house_starts
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国成屋销售
       source_key: macro.us.exist_home_sales
       api_source: akshare
@@ -152,6 +165,7 @@ categories:
       indicator: us.exist_home_sales
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
     - name: 美国个人支出
       source_key: macro.us.personal_spending
       api_source: akshare
@@ -160,12 +174,14 @@ categories:
       indicator: us.personal_spending
       params: {}
       schedule_cron: 0 22 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-08），已有 FRED 获信源，保留历史
     - name: 美国密歇根消费者信心
       source_key: macro.us.michigan_consumer_sentiment
       api_source: akshare
       api_function: macro_usa_michigan_consumer_sentiment
       table_name: macro_usa_michigan_consumer_sentiment
       indicator: us.michigan_sentiment
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国NFIB小企业信心
