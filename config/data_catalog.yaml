@@ -750,6 +750,8 @@ categories:
     api_source: tushare
     api_function: fund_daily
     table_name: fund_etf_daily
+    # 数据使用警告：GUI 加载该表时顶部黄色警告条展示（见 docs/DATA_GOVERNANCE.md §5）
+    data_warning: "2005-2017 含封闭式基金/LOF，按 ETF 口径统计时需过滤"
     has_incremental: true
     incremental_field: date
     # tushare fund_daily 返回 YYYYMMDD 日期，需按此格式传 start/end

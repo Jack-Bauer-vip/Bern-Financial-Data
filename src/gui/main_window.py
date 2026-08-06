@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, QThread, Signal, Qt, QTimer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QLabel, QDialog, QMessageBox,
-    QFileDialog, QApplication, QProgressBar,
+    QFileDialog, QApplication, QProgressBar, QFrame,
 )
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QStatusBar
@@ -373,11 +373,29 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(4)
 
         self.param_panel = ParamPanel()
+        # 数据使用警告条（默认隐藏）：fund_etf_daily 等含早期封闭式/LOF 的表
+        # 加载时提示，防止下游按 ETF 口径误用。非模态 QFrame 常驻布局，
+        # show/hide 由 _update_data_warning 按当前源 data_warning 字段控制。
+        self._data_warning_bar = QFrame()
+        self._data_warning_bar.setObjectName("dataWarningBar")
+        self._data_warning_bar.setStyleSheet(
+            "QFrame#dataWarningBar { background: #fff3cd;"
+            " border: 1px solid #ffc107; border-radius: 3px; }"
+            "QLabel { color: #8a6d00; font-size: 12px; padding: 2px 8px; }")
+        self._data_warning_bar.setMaximumHeight(40)  # 限高，防止把表格压得太靠下
+        bar_layout = QHBoxLayout(self._data_warning_bar)
+        bar_layout.setContentsMargins(4, 2, 4, 2)
+        self._data_warning_label = QLabel()
+        self._data_warning_label.setWordWrap(True)
+        bar_layout.addWidget(self._data_warning_label)
+        self._data_warning_bar.setVisible(False)
+
         self.table_view = DataTableView()
         self.log_widget = LogWidget()
         self.log_widget.setMaximumHeight(180)
 
         right_layout.addWidget(self.param_panel)
+        right_layout.addWidget(self._data_warning_bar)
         right_layout.addWidget(self.table_view, stretch=1)
         right_layout.addWidget(self.log_widget)
 
@@ -820,6 +838,22 @@ class MainWindow(QMainWindow):
     # ★ 树节点选择 — 动态参数 + 参数记忆
     # ------------------------------------------------------------------
 
+    def _update_data_warning(self) -> None:
+        """按当前数据源显示/隐藏数据使用警告条
+
+        取 source 的 data_warning 字段（catalog 配置，见 docs/DATA_GOVERNANCE.md §5）。
+        有 → 显示黄色警告条并限高；无 → 隐藏（hidden 控件不占布局空间，表格间距自动恢复）。
+        """
+        warning = ""
+        if self._current_source_key:
+            source = self.registry.get_source(self._current_source_key)
+            warning = (source or {}).get("data_warning") or ""
+        if warning:
+            self._data_warning_label.setText(f"⚠️ {warning}")
+            self._data_warning_bar.setVisible(True)
+        else:
+            self._data_warning_bar.setVisible(False)
+
     def on_tree_node_selected(self, source_key: str) -> None:
         """树节点选中：保存旧参数 → 加载新模板 → 恢复记忆参数 → 加载DB数据"""
         # 1. 保存当前参数到记忆
@@ -830,6 +864,7 @@ class MainWindow(QMainWindow):
 
         self._current_source_key = source_key
         source = self.registry.get_source(source_key)
+        self._update_data_warning()
 
         if not source:
             self.table_view.clear()
