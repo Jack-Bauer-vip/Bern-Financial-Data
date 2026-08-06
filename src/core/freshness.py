@@ -6,10 +6,13 @@ CLI 脚本不能 import 它，故纯逻辑独立成模块）。
 """
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 import pandas as pd
+
+# 长任务僵死判定阈值：running 状态但心跳超过该分钟数未刷新 → 疑似僵死
+HEARTBEAT_STALE_MINUTES = 10
 
 
 # Cron 表达式到预期更新间隔（天）的映射
@@ -97,6 +100,40 @@ def get_stale_status(
         return ("🔴 停更", "#c62828", f"{days_since} 天前")
 
 
+def is_heartbeat_stale(
+    running_status: str,
+    last_heartbeat: datetime | None,
+    now: datetime | None = None,
+) -> bool:
+    """长任务僵死检测：running 状态但心跳过期（> HEARTBEAT_STALE_MINUTES）→ True
+
+    running 且从未心跳（last_heartbeat=None）也视为疑似僵死。
+    """
+    if running_status != "running":
+        return False
+    if last_heartbeat is None:
+        return True
+    now = now or datetime.now()
+    try:
+        delta = now - last_heartbeat
+    except TypeError:
+        return True
+    return delta.total_seconds() > HEARTBEAT_STALE_MINUTES * 60
+
+
+def running_heartbeat_label(
+    running_status: str,
+    last_heartbeat: datetime | None,
+    now: datetime | None = None,
+) -> tuple[str | None, str | None]:
+    """长任务运行状态标签：运行中(蓝) / 疑似僵死(暗红)；非 running 返回 (None, None)"""
+    if running_status != "running":
+        return None, None
+    if is_heartbeat_stale(running_status, last_heartbeat, now):
+        return "疑似僵死", "#8b0000"
+    return "运行中", "#1e88e5"
+
+
 @dataclass
 class SourceFreshness:
     """单个数据源的新鲜度快照"""
@@ -111,6 +148,8 @@ class SourceFreshness:
     days_text: str
     days_since: int | None
     deprecated: bool = False
+    running_status: str = "idle"
+    last_heartbeat: datetime | None = None
 
 
 def collect_source_freshness(
@@ -138,11 +177,17 @@ def collect_source_freshness(
         cron = src.get("schedule_cron", "")
 
         sync_job = None
+        running_status = "idle"
+        last_heartbeat = None
         try:
             if table_name:
                 sync_job = repo.get_sync_job(table_name)
             if sync_job is None and source_key != table_name:
                 sync_job = repo.get_sync_job(source_key)
+            if sync_job is not None:
+                # 长任务运行状态/心跳（P1）——健康检查据此判「疑似僵死」
+                running_status = getattr(sync_job, "running_status", "idle") or "idle"
+                last_heartbeat = getattr(sync_job, "last_heartbeat", None)
         except Exception:
             pass
 
@@ -193,5 +238,7 @@ def collect_source_freshness(
             days_text=days_text,
             days_since=days_since,
             deprecated=deprecated,
+            running_status=running_status,
+            last_heartbeat=last_heartbeat,
         ))
     return out

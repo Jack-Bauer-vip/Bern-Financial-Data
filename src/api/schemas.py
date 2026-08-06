@@ -19,6 +19,7 @@ class DataResponse(BaseModel):
     total: int = 0
     source: str = "local_db"
     data_status: str = "active"  # active / deprecated / local
+    meta: Optional[dict] = None  # 附加元信息（如指标口径 unit_type/unit_desc）
 
 
 class ErrorResponse(BaseModel):

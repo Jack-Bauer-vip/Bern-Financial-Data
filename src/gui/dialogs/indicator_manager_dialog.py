@@ -47,9 +47,9 @@ class IndicatorManagerDialog(QDialog):
         layout.addWidget(subtitle)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(4)
+        self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
-            ["指标", "候选来源", "当前获信源", "最新数据日期"])
+            ["指标", "候选来源", "当前获信源", "口径", "最新数据日期"])
         self.table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(
@@ -58,6 +58,8 @@ class IndicatorManagerDialog(QDialog):
             2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setSelectionBehavior(
             QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(
@@ -85,7 +87,7 @@ class IndicatorManagerDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _collect_indicators(self) -> dict:
-        """从目录收集所有指标及其候选来源"""
+        """从目录收集所有指标及其候选来源（含口径语义 unit_type/unit_desc）"""
         groups: dict = {}
         for s in self.registry.get_all_sources():
             ind = s.get("indicator")
@@ -95,6 +97,8 @@ class IndicatorManagerDialog(QDialog):
                 "table_name": s.get("table_name", ""),
                 "api_source": s.get("api_source", ""),
                 "name": s.get("name", ""),
+                "unit_type": str(s.get("unit_type", "level")),
+                "unit_desc": s.get("unit_desc") or "",
             })
         return groups
 
@@ -149,10 +153,22 @@ class IndicatorManagerDialog(QDialog):
                 lambda text, r=row, k=ind: self._on_trust_change(k, text, r))
             self.table.setCellWidget(row, 2, combo)
 
-            # 列3: 最新数据日期（优先获信源表）
+            # 列3: 口径（当前选中项的存储值语义，P0）
+            combo_text = combo.currentText()
+            unit_desc = next(
+                (c["unit_desc"] for c in cands
+                 if c["table_name"] == combo_text), "")
+            unit_type = next(
+                (c["unit_type"] for c in cands
+                 if c["table_name"] == combo_text), "")
+            unit_cell = (f"{unit_desc} ({unit_type})" if unit_desc
+                         else "—")
+            self.table.setItem(row, 3, QTableWidgetItem(unit_cell))
+
+            # 列4: 最新数据日期（优先获信源表）
             pref_table = preferred or cands[0]["table_name"]
             self.table.setItem(
-                row, 3, QTableWidgetItem(self._get_last_date(pref_table) or "从未同步"))
+                row, 4, QTableWidgetItem(self._get_last_date(pref_table) or "从未同步"))
 
         # 统计
         n_mapped = sum(1 for ind in indicators
@@ -163,18 +179,30 @@ class IndicatorManagerDialog(QDialog):
         self.table.resizeColumnsToContents()
 
     def _on_trust_change(self, indicator_key: str, table_name: str, row: int) -> None:
-        """获信源下拉变更 → 持久化并刷新该行"""
+        """获信源下拉变更 → 持久化（带口径）并刷新该行"""
         if not table_name or table_name == "(未设置)":
             return
-        record = self.repo.set_indicator(indicator_key, table_name)
+        # 从候选源取口径语义（unit 与指标含义绑定在目录配置）
+        unit_type = unit_desc = None
+        for c in self._collect_indicators().get(indicator_key, []):
+            if c["table_name"] == table_name:
+                unit_type = c["unit_type"]
+                unit_desc = c["unit_desc"]
+                break
+        record = self.repo.set_indicator(
+            indicator_key, table_name,
+            unit_type=unit_type, unit_desc=unit_desc)
         if record is None:
             QMessageBox.warning(
                 self, "设置失败",
                 f"无法把表 [{table_name}] 设为获信源：\n"
                 "未能解析日期列/数值列，或表不存在。")
             return
+        # 更新口径列（列3）与最新日期列（列4）
+        unit_cell = f"{unit_desc} ({unit_type})" if unit_desc else "—"
+        self.table.setItem(row, 3, QTableWidgetItem(unit_cell))
         self.table.setItem(
-            row, 3, QTableWidgetItem(self._get_last_date(table_name) or "从未同步"))
+            row, 4, QTableWidgetItem(self._get_last_date(table_name) or "从未同步"))
         # 更新统计
         n_mapped = sum(1 for r in range(self.table.rowCount())
                        if self.repo.get_indicator_map(

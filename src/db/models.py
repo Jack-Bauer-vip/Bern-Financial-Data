@@ -60,6 +60,10 @@ class SyncJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     schedule_cron: Mapped[str | None] = mapped_column(String(32), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 长任务运行状态（P1）：run_fund_daily_batch 等长任务期间置 running，
+    # 逐日刷新 last_heartbeat；健康检查据此判断「疑似僵死」。
+    running_status: Mapped[str] = mapped_column(String(16), default="idle")
+    last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -122,6 +126,10 @@ class IndicatorMap(Base):
     source_api: Mapped[str] = mapped_column(String(16))          # 首选源的 api_source
     date_column: Mapped[str] = mapped_column(String(64))         # 首选源表实际日期列
     value_column: Mapped[str] = mapped_column(String(64))        # 首选源表实际数值列
+    # 口径语义（P0）：存储值含义绑定在 data_catalog.yaml 的源节点，
+    # 不靠启发式。unit_type ∈ {level, yoy, mom}；unit_desc 人类可读说明。
+    unit_type: Mapped[str] = mapped_column(String(16), default="level")
+    unit_desc: Mapped[str | None] = mapped_column(String(128), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

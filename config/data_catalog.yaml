@@ -14,6 +14,8 @@ categories:
       api_function: macro_usa_cpi_yoy
       table_name: macro_usa_cpi_yoy
       indicator: us.cpi
+      unit_type: yoy
+      unit_desc: 同比变化率(%)
       params: {}
       schedule_cron: 0 22 * * 1-5
     - name: 美国核心CPI月率
@@ -22,6 +24,8 @@ categories:
       api_function: macro_usa_core_cpi_monthly
       table_name: macro_usa_core_cpi_monthly
       indicator: us.core_cpi
+      unit_type: mom
+      unit_desc: 环比变化率(%)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -31,6 +35,8 @@ categories:
       api_function: macro_usa_gdp_monthly
       table_name: macro_usa_gdp_monthly
       indicator: us.gdp
+      unit_type: yoy
+      unit_desc: 国内生产总值同比增速(%)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -40,6 +46,8 @@ categories:
       api_function: macro_usa_non_farm
       table_name: macro_usa_non_farm
       indicator: us.non_farm
+      unit_type: level
+      unit_desc: 新增非农就业(万人)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -49,6 +57,8 @@ categories:
       api_function: macro_usa_unemployment_rate
       table_name: macro_usa_unemployment_rate
       indicator: us.unemployment
+      unit_type: level
+      unit_desc: 失业率(%)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -74,6 +84,8 @@ categories:
       api_function: macro_usa_retail_sales
       table_name: macro_usa_retail_sales
       indicator: us.retail_sales
+      unit_type: mom
+      unit_desc: 环比变化率(%)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -83,6 +95,8 @@ categories:
       api_function: macro_usa_initial_jobless
       table_name: macro_usa_initial_jobless
       indicator: us.initial_jobless
+      unit_type: level
+      unit_desc: 初请失业金人数(万人)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -100,6 +114,8 @@ categories:
       api_function: macro_usa_ppi
       table_name: macro_usa_ppi
       indicator: us.ppi
+      unit_type: mom
+      unit_desc: 环比变化率(%)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -109,6 +125,8 @@ categories:
       api_function: macro_usa_core_pce_price
       table_name: macro_usa_core_pce_price
       indicator: us.core_pce
+      unit_type: yoy
+      unit_desc: 同比变化率(%)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-08），已有 FRED 获信源，保留历史
@@ -118,6 +136,8 @@ categories:
       api_function: macro_usa_factory_orders
       table_name: macro_usa_factory_orders
       indicator: us.factory_orders
+      unit_type: mom
+      unit_desc: 环比变化率(%)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -127,6 +147,8 @@ categories:
       api_function: macro_usa_durable_goods_orders
       table_name: macro_usa_durable_goods_orders
       indicator: us.durable_goods
+      unit_type: mom
+      unit_desc: 环比变化率(%)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -136,6 +158,8 @@ categories:
       api_function: macro_usa_trade_balance
       table_name: macro_usa_trade_balance
       indicator: us.trade_balance
+      unit_type: level
+      unit_desc: 贸易差额(亿美元)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -145,6 +169,8 @@ categories:
       api_function: macro_usa_industrial_production
       table_name: macro_usa_industrial_production
       indicator: us.industrial_production
+      unit_type: mom
+      unit_desc: 环比变化率(%)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -154,6 +180,8 @@ categories:
       api_function: macro_usa_house_starts
       table_name: macro_usa_house_starts
       indicator: us.house_starts
+      unit_type: level
+      unit_desc: 新屋开工(万套/年化)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -163,6 +191,8 @@ categories:
       api_function: macro_usa_exist_home_sales
       table_name: macro_usa_exist_home_sales
       indicator: us.exist_home_sales
+      unit_type: level
+      unit_desc: 成屋销售(万套/年化)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
@@ -172,6 +202,8 @@ categories:
       api_function: macro_usa_personal_spending
       table_name: macro_usa_personal_spending
       indicator: us.personal_spending
+      unit_type: mom
+      unit_desc: 环比变化率(%)
       params: {}
       schedule_cron: 0 22 * * 1-5
       deprecated: true   # 上游聚合站停更（数据止于 2025-08），已有 FRED 获信源，保留历史
@@ -181,6 +213,8 @@ categories:
       api_function: macro_usa_michigan_consumer_sentiment
       table_name: macro_usa_michigan_consumer_sentiment
       indicator: us.michigan_sentiment
+      unit_type: level
+      unit_desc: 消费者信心指数
       deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有 FRED 获信源，保留历史
       params: {}
       schedule_cron: 0 22 * * 1-5
@@ -198,6 +232,8 @@ categories:
       api_function: bond_gb_us_sina
       table_name: macro_usa_bond_yield_30y
       indicator: us.bond_yield_30y
+      unit_type: level
+      unit_desc: 收益率(%)
       has_incremental: true
       incremental_field: date
       params_template:
@@ -214,6 +250,8 @@ categories:
       api_function: bond_gb_us_sina
       table_name: macro_usa_bond_yield_2y
       indicator: us.bond_yield_2y
+      unit_type: level
+      unit_desc: 收益率(%)
       has_incremental: true
       incremental_field: date
       params_template:
@@ -230,6 +268,8 @@ categories:
       api_function: bond_gb_us_sina
       table_name: macro_usa_bond_yield_10y
       indicator: us.bond_yield_10y
+      unit_type: level
+      unit_desc: 收益率(%)
       has_incremental: true
       incremental_field: date
       params_template:
@@ -249,6 +289,8 @@ categories:
         api_function: UNRATE
         table_name: macro_fred_unemployment
         indicator: us.unemployment
+        unit_type: level
+        unit_desc: 失业率(%)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国10年期国债收益率(FRED)
@@ -257,6 +299,8 @@ categories:
         api_function: DGS10
         table_name: macro_fred_bond_yield_10y
         indicator: us.bond_yield_10y
+        unit_type: level
+        unit_desc: 10年期国债收益率(%)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国CPI(FRED)
@@ -265,6 +309,8 @@ categories:
         api_function: CPIAUCSL
         table_name: macro_fred_cpi
         indicator: us.cpi
+        unit_type: level
+        unit_desc: CPI 指数(1982-84=100)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国非农就业(FRED)
@@ -273,6 +319,8 @@ categories:
         api_function: PAYEMS
         table_name: macro_fred_non_farm
         indicator: us.non_farm
+        unit_type: level
+        unit_desc: 非农就业人数(千人)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国实际GDP(FRED)
@@ -281,6 +329,8 @@ categories:
         api_function: GDPC1
         table_name: macro_fred_gdp
         indicator: us.gdp
+        unit_type: level
+        unit_desc: 实际GDP(2017年链式美元,十亿)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国核心CPI(FRED)
@@ -289,6 +339,8 @@ categories:
         api_function: CPILFESL
         table_name: macro_fred_core_cpi
         indicator: us.core_cpi
+        unit_type: level
+        unit_desc: 核心CPI 指数(1982-84=100)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国零售销售(FRED)
@@ -297,6 +349,8 @@ categories:
         api_function: RSAFS
         table_name: macro_fred_retail_sales
         indicator: us.retail_sales
+        unit_type: level
+        unit_desc: 零售销售(百万美元)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国初请失业金(FRED)
@@ -305,6 +359,8 @@ categories:
         api_function: ICSA
         table_name: macro_fred_initial_jobless
         indicator: us.initial_jobless
+        unit_type: level
+        unit_desc: 初请失业金人数(千人)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国PPI(FRED)
@@ -313,6 +369,8 @@ categories:
         api_function: PPIFID
         table_name: macro_fred_ppi
         indicator: us.ppi
+        unit_type: level
+        unit_desc: PPI 指数(1982=100)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国核心PCE(FRED)
@@ -321,6 +379,8 @@ categories:
         api_function: PCEPILFE
         table_name: macro_fred_core_pce
         indicator: us.core_pce
+        unit_type: level
+        unit_desc: 核心PCE 价格指数(2017=100)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国工厂订单(FRED)
@@ -329,6 +389,8 @@ categories:
         api_function: AMTMNO
         table_name: macro_fred_factory_orders
         indicator: us.factory_orders
+        unit_type: level
+        unit_desc: 工厂订单(百万美元)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国耐用品订单(FRED)
@@ -337,6 +399,8 @@ categories:
         api_function: DGORDER
         table_name: macro_fred_durable_goods
         indicator: us.durable_goods
+        unit_type: level
+        unit_desc: 耐用品订单(百万美元)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国贸易帐(FRED)
@@ -345,6 +409,8 @@ categories:
         api_function: BOPGSTB
         table_name: macro_fred_trade_balance
         indicator: us.trade_balance
+        unit_type: level
+        unit_desc: 贸易余额(百万美元)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国工业产出(FRED)
@@ -353,6 +419,8 @@ categories:
         api_function: INDPRO
         table_name: macro_fred_industrial_production
         indicator: us.industrial_production
+        unit_type: level
+        unit_desc: 工业生产指数(2017=100)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国新屋开工(FRED)
@@ -361,6 +429,8 @@ categories:
         api_function: HOUST
         table_name: macro_fred_house_starts
         indicator: us.house_starts
+        unit_type: level
+        unit_desc: 新屋开工(千套/年化)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国成屋销售(FRED)
@@ -369,6 +439,8 @@ categories:
         api_function: EXHOSLUSM495S
         table_name: macro_fred_exist_home_sales
         indicator: us.exist_home_sales
+        unit_type: level
+        unit_desc: 成屋销售(套/年化)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国个人支出(FRED)
@@ -377,6 +449,8 @@ categories:
         api_function: PCE
         table_name: macro_fred_personal_spending
         indicator: us.personal_spending
+        unit_type: level
+        unit_desc: 个人消费支出(十亿美元/年化)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国密歇根消费者信心(FRED)
@@ -385,6 +459,8 @@ categories:
         api_function: UMCSENT
         table_name: macro_fred_michigan_sentiment
         indicator: us.michigan_sentiment
+        unit_type: level
+        unit_desc: 消费者信心指数(1966Q1=100)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国30年期国债收益率(FRED)
@@ -393,6 +469,8 @@ categories:
         api_function: DGS30
         table_name: macro_fred_bond_yield_30y
         indicator: us.bond_yield_30y
+        unit_type: level
+        unit_desc: 30年期国债收益率(%)
         params: {}
         schedule_cron: 0 22 * * 1-5
       - name: 美国2年期国债收益率(FRED)
@@ -401,6 +479,8 @@ categories:
         api_function: DGS2
         table_name: macro_fred_bond_yield_2y
         indicator: us.bond_yield_2y
+        unit_type: level
+        unit_desc: 2年期国债收益率(%)
         params: {}
         schedule_cron: 0 22 * * 1-5
   - name: 🇪🇺 欧元区经济

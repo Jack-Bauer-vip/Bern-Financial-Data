@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, QThread, Signal, Qt, QTimer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QLabel, QDialog, QMessageBox,
-    QFileDialog, QApplication,
+    QFileDialog, QApplication, QProgressBar,
 )
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QStatusBar
@@ -312,6 +312,9 @@ class MainWindow(QMainWindow):
         #   线程——避免主线程被 repo.query + 全量 model reset 阻塞导致 UI 无响应
         self._refresh_in_progress = False
         self._refresh_pending = False
+        # 全量同步进行中标记：控制状态栏进度条的显示/隐藏（on_sync_completed
+        #   只在不属于 run_all 的普通同步完成时隐藏进度条）
+        self._sync_all_active = False
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(300)
@@ -548,6 +551,7 @@ class MainWindow(QMainWindow):
 
         self.sync_engine.sync_completed.connect(self.on_sync_completed)
         self.sync_engine.sync_error.connect(self.on_sync_error)
+        self.sync_engine.sync_progress.connect(self._on_sync_progress)
         self.sync_engine.log_message.connect(self.log_widget.write)
 
     # ------------------------------------------------------------------
@@ -557,6 +561,16 @@ class MainWindow(QMainWindow):
     def _init_status_bar(self) -> None:
         status_bar = self.statusBar()
         status_bar.showMessage("就绪", 5000)
+
+        # 全量同步进度条（默认隐藏，run_all 期间按 sync_progress 信号推进）。
+        # ★ 必须用 addPermanentWidget：QStatusBar 显示临时消息(showMessage)时
+        #   会隐藏 addWidget 添加的普通控件，常驻控件不受影响，否则进度条
+        #   在消息出现时被压掉永远看不见。
+        self.sync_progress_bar = QProgressBar()
+        self.sync_progress_bar.setFixedWidth(160)
+        self.sync_progress_bar.setTextVisible(False)
+        self.sync_progress_bar.setVisible(False)
+        status_bar.addPermanentWidget(self.sync_progress_bar)
 
         self.row_count_label = QLabel("行数: 0")
         status_bar.addPermanentWidget(self.row_count_label)
@@ -1400,6 +1414,7 @@ class MainWindow(QMainWindow):
             return
 
         self.log_widget.write("INFO", f"开始全量同步 {n} 个数据源...")
+        self._sync_all_active = True
         thread = QThread(self)
         worker = SyncAllWorker(self.sync_engine)
         # ★ 防 GC：worker 局部变量函数返回后被回收，started 连接失效
@@ -1408,6 +1423,8 @@ class MainWindow(QMainWindow):
 
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
+        # 全量结束 → 收起状态栏进度条（queued 投递回主线程）
+        worker.finished.connect(self._on_sync_all_finished)
         thread.finished.connect(thread.deleteLater)
 
         thread.started.connect(worker.run)
@@ -1438,6 +1455,8 @@ class MainWindow(QMainWindow):
 
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
+        # 批量更新走 run_fund_daily_batch（无 sync_progress），结束后顺手收起进度条
+        worker.finished.connect(self._on_sync_all_finished)
         worker.error.connect(
             lambda err: self.log_widget.write("ERROR", f"批量更新失败: {err}"))
         thread.finished.connect(thread.deleteLater)
@@ -1452,12 +1471,40 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"同步完成: {source_key} 新增 {added} 条", 5000
         )
+        # 单源同步完成 → 收起进度条；run_all 期间保持显示（由 run_all 结束信号收尾）
+        if not self._sync_all_active:
+            self.sync_progress_bar.setVisible(False)
         self._refresh_current_table()
 
     def on_sync_error(self, source_key: str, error: str) -> None:
         """同步错误回调"""
         self.statusBar().showMessage(f"同步失败: {source_key}", 5000)
         self.log_widget.write("ERROR", f"同步失败 [{source_key}]: {error}")
+
+    def _on_sync_progress(self, source_key: str, current: int, total: int) -> None:
+        """全量同步进度槽 — 更新状态栏进度条 + 文本
+
+        run_all() 逐源发射 sync_progress(key, i-1, total)：current 为 0 基下标。
+        单源 run() 发射 sync_progress(key, 0, len(df))：total 是行数而非源数，
+        用 _sync_all_active 区分 —— run_all 中显示确定进度，单源只做忙碌指示。
+        """
+        bar = self.sync_progress_bar
+        bar.setVisible(True)
+        if self._sync_all_active:
+            bar.setRange(0, max(total, 1))
+            bar.setValue(min(current + 1, max(total, 1)))
+            self.statusBar().showMessage(
+                f"正在同步 ({current + 1}/{total}): {source_key}", 0)
+        else:
+            # 单源同步：行数无进度意义 → 忙碌指示 + 当前源名
+            bar.setRange(0, 0)
+            self.statusBar().showMessage(f"正在同步: {source_key}", 0)
+
+    def _on_sync_all_finished(self) -> None:
+        """全量同步（run_all）结束：收起进度条、复位状态"""
+        self._sync_all_active = False
+        self.sync_progress_bar.setVisible(False)
+        self.statusBar().showMessage("全量同步完成", 5000)
 
     def _refresh_current_table(self) -> None:
         """防抖刷新当前表：合并同步期间的多次请求，空闲 300ms 后后台查库

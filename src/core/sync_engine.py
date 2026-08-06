@@ -398,7 +398,13 @@ class SyncEngine(QObject):
             ind_key = source_cfg.get("indicator")
             if ind_key:
                 try:
-                    self.repo.auto_adopt_indicator(str(ind_key), table_name)
+                    # 口径语义（P0）从源节点配置透传：unit 与指标含义绑定在配置，
+                    # 不靠启发式。FRED 源 → level；akshare 同比/环比表 → yoy/mom。
+                    self.repo.auto_adopt_indicator(
+                        str(ind_key), table_name,
+                        unit_type=str(source_cfg.get("unit_type", "level")),
+                        unit_desc=source_cfg.get("unit_desc") or None,
+                    )
                 except Exception:
                     pass  # 自动沿用失败不影响同步结果
 
@@ -502,6 +508,14 @@ class SyncEngine(QObject):
         self._log("INFO", f"[基金批量] 待处理 {len(trade_days)} 个交易日")
         self.sync_started.emit("fund.etf_daily")
 
+        # P1 长任务心跳：进入批量循环即标 running，逐交易日刷新心跳（轻量 UPDATE）。
+        # 若任务进程被杀，running_status 残留 running 且心跳过期 → 健康检查标「疑似僵死」。
+        try:
+            self.repo.update_sync_heartbeat(
+                table_name, "running", datetime.now())
+        except Exception:
+            pass
+
         total = 0
         failed = 0
         skipped = 0
@@ -529,10 +543,16 @@ class SyncEngine(QObject):
                 batch_size=self.config.get("sync.batch_size", 500))
             total += added
             self._log("INFO", f"[基金批量] {d}: 全市场 {len(df)} 行，写入 {added} 行")
+            # 逐交易日刷新心跳（P1，一天一次轻量 UPDATE）
+            try:
+                self.repo.update_sync_heartbeat(
+                    table_name, "running", datetime.now())
+            except Exception:
+                pass
             # 温和间隔，防限流（tushare 实测 ~150次/分，逐日 N 次完全安全）
             time.sleep(random.uniform(0.3, 0.8))
 
-        # 更新同步任务状态
+        # 更新同步任务状态（P1：结束回 idle，清除运行态）
         last_date = self.repo.get_last_date(table_name, "date")
         row_count = self.repo.count_rows(table_name)
         self.repo.update_sync_job(table_name, {
@@ -546,6 +566,8 @@ class SyncEngine(QObject):
             "status": "completed",
             "error_message": None,
             "enabled": True,
+            "running_status": "idle",
+            "last_heartbeat": None,
         })
 
         # 清查询缓存

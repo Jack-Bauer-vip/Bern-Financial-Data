@@ -153,12 +153,23 @@ async def list_connections():
 
 
 @router.get("/sources", tags=["元数据"])
-async def list_sources(repo=Depends(get_repo)):
-    """列出所有可用数据源"""
+async def list_sources(
+    include_deprecated: bool = Query(
+        True, description="是否包含 deprecated 源（上游停更、保留历史的源）"),
+    repo=Depends(get_repo),
+):
+    """列出所有可用数据源
+
+    include_deprecated=False 时过滤 data_status == deprecated 的源
+    （默认 True 保持现状，零破坏）。
+    """
     from src.utils.config import ConfigManager
     from src.core.fetcher_registry import FetcherRegistry
     registry = FetcherRegistry(ConfigManager())
     all_src = registry.get_all_sources()
+
+    if not include_deprecated:
+        all_src = [s for s in all_src if not s.get("deprecated")]
 
     return DataResponse(
         data=[{
@@ -489,6 +500,11 @@ async def get_indicator(
     统一经 compute_transform 数值化：**默认(不带 transform 或 level)也 to_numeric
     返回 float**（此前返回库内 TEXT 字符串，消费端要自己 float()）；yoy/mom/pct
     为派生视图。缓存原始 {date,value}（同步成功后由 SyncEngine 单点失效）。
+
+    响应 meta 携带**存储值口径**（unit_type/unit_desc，来自获信源所在 catalog 节点）
+    与本次请求的 transform。**守则：transform 与派生逻辑完全不变，unit 只描述
+    原始存储值**——transform=level 时 data 即原始存储口径；transform=yoy/mom 时
+    是派生结果。二者互不干扰。
     """
     from src.core.ttl_cache import cache
 
@@ -499,8 +515,18 @@ async def get_indicator(
         if len(df) <= 100_000:
             cache.set(cache_key, df)
 
+    # 存储值口径：从获信源映射取（P0）
+    unit_type, unit_desc = "level", None
+    mapping = repo.get_indicator_map(indicator_key)
+    if mapping:
+        unit_type = mapping.get("unit_type") or "level"
+        unit_desc = mapping.get("unit_desc")
+
     if df.empty:
-        return DataResponse(data=[], total=0, source=f"indicator:{indicator_key}")
+        return DataResponse(
+            data=[], total=0, source=f"indicator:{indicator_key}",
+            meta={"unit_type": unit_type, "unit_desc": unit_desc,
+                  "transform": transform or "level"})
 
     # 统一数值化：默认 level 也 to_numeric → float；yoy/mom/pct 派生
     from src.core.transform import compute_transform
@@ -514,6 +540,8 @@ async def get_indicator(
         data=_df_to_json_records(df, limit),
         total=len(df),
         source=f"indicator:{indicator_key}",
+        meta={"unit_type": unit_type, "unit_desc": unit_desc,
+              "transform": transform or "level"},
     )
 
 

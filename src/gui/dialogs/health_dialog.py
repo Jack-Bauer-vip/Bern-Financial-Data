@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QColor, QBrush
 
 
-from src.core.freshness import collect_source_freshness
+from src.core.freshness import collect_source_freshness, running_heartbeat_label
 
 
 class HealthDialog(QDialog):
@@ -96,24 +96,36 @@ class HealthDialog(QDialog):
         for f in collect_source_freshness(self.repo, self.registry, today):
             # 经济体归类
             economy = self._guess_economy(f.source_key)
+
+            # P1 长任务僵死检测：running 但心跳过期 → 覆盖数据新鲜度状态为「疑似僵死」
+            status = f.status_label
+            status_color = f.status_color
+            h_label, h_color = running_heartbeat_label(
+                f.running_status, f.last_heartbeat)
+            if h_label:
+                status, status_color = h_label, h_color
+
             # 建议操作
             suggestion = self._get_suggestion(
-                f.status_label, f.api_function, f.source_key)
+                status, f.api_function, f.source_key)
 
             rows.append({
                 "name": f.name,
                 "economy": economy,
                 "last_date": f.last_date.strftime("%Y-%m-%d") if f.last_date else "从未同步",
-                "status": f.status_label,
-                "status_color": f.status_color,
+                "status": status,
+                "status_color": status_color,
                 "days": f.days_text,
                 "cron": self._describe_cron(f.cron),
                 "suggestion": suggestion,
                 "api_func": f.api_function,
             })
 
-        # 按状态排序：停更 > 滞后 > 正常 > 未同步
-        status_order = {"🔴 停更": 0, "⚠️ 滞后": 1, "✅ 正常": 2, "未同步": 3}
+        # 按状态排序：疑似僵死 > 停更 > 滞后 > 正常 > 未同步
+        status_order = {
+            "疑似僵死": 0, "🔴 停更": 1, "⚠️ 滞后": 2,
+            "✅ 正常": 3, "未同步": 4,
+        }
         rows.sort(key=lambda r: (
             status_order.get(r["status"], 9),
             r["last_date"] if r["last_date"] != "从未同步" else "",
@@ -136,15 +148,17 @@ class HealthDialog(QDialog):
 
         # 统计
         total = len(rows)
+        dead = sum(1 for r in rows if r["status"] == "疑似僵死")
         stale = sum(1 for r in rows if r["status"] == "🔴 停更")
         lagging = sum(1 for r in rows if r["status"] == "⚠️ 滞后")
         ok = sum(1 for r in rows if r["status"] == "✅ 正常")
         never = sum(1 for r in rows if r["status"] == "未同步")
 
+        dead_txt = f"  |  ⚠️ {dead} 疑似僵死" if dead else ""
         self.summary_label.setText(
             f"共 {total} 个数据源  |  "
             f"🟢 {ok} 正常  |  🟡 {lagging} 滞后  |  "
-            f"🔴 {stale} 停更  |  ⚪ {never} 未同步"
+            f"🔴 {stale} 停更  |  ⚪ {never} 未同步{dead_txt}"
         )
 
         self.table.resizeColumnsToContents()
@@ -194,6 +208,8 @@ class HealthDialog(QDialog):
         """根据状态给出建议"""
         if status_label == "未同步":
             return "点击「增量同步」首次获取"
+        if status_label == "疑似僵死":
+            return "长任务心跳过期，检查后台同步是否卡死/被中断"
         if status_label == "🔴 停更":
             # 推荐备用数据源
             alt = self._find_alternative(source_key)

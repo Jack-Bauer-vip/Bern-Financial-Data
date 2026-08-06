@@ -91,7 +91,7 @@ class DataRepository:
     # ------------------------------------------------------------------
 
     def list_indicators(self) -> list[dict]:
-        """读取全部指标映射（indicator → 获信源表 + 列映射）"""
+        """读取全部指标映射（indicator → 获信源表 + 列映射 + 口径语义）"""
         with Session(self.engine) as session:
             rows = session.execute(
                 select(IndicatorMap).order_by(IndicatorMap.indicator_key)
@@ -103,6 +103,8 @@ class DataRepository:
                 "source_api": r.source_api,
                 "date_column": r.date_column,
                 "value_column": r.value_column,
+                "unit_type": r.unit_type,
+                "unit_desc": r.unit_desc,
             }
             for r in rows
         ]
@@ -142,13 +144,21 @@ class DataRepository:
                 continue
         return None
 
-    def set_indicator(self, indicator_key: str, table_name: str) -> dict | None:
+    def set_indicator(
+        self,
+        indicator_key: str,
+        table_name: str,
+        unit_type: str | None = None,
+        unit_desc: str | None = None,
+    ) -> dict | None:
         """手动选择某指标的获信源表 → 解析列映射并 UPSERT 到 meta_indicator
 
         - 表已同步：解析日期/数值列后存储。
         - 目录中声明但尚未同步的表：允许「预配置」获信源（date/value 列留空，
           首次同步后 get_indicator 动态解析）。这使 FRED 等新表未同步时也能先选。
         - 无效表（目录里都没有）→ None。
+        - unit_type/unit_desc：存储值口径语义（level/yoy/mom + 人类可读说明），
+          从 data_catalog.yaml 源节点透传；未传则保留库内现值（或默认 level）。
 
         Returns:
             新映射 dict；表既不存在也不在目录 → None
@@ -172,12 +182,24 @@ class DataRepository:
                 source_api = str(src.get("api_source", ""))
                 break
 
+        # 未显式传 unit 时，尝试从目录源节点取（保持与同步路径一致）
+        if unit_type is None or unit_desc is None:
+            for src in self.get_all_enabled_sources():
+                if src.get("table_name") == table_name:
+                    if unit_type is None:
+                        unit_type = str(src.get("unit_type", "level"))
+                    if unit_desc is None:
+                        unit_desc = src.get("unit_desc") or ""
+                    break
+
         record = {
             "indicator_key": indicator_key,
             "preferred_table": table_name,
             "source_api": source_api,
             "date_column": date_col,
             "value_column": value_col,
+            "unit_type": unit_type or "level",
+            "unit_desc": unit_desc or None,
         }
         now = _now_utc()
         with self.engine.connect() as conn:
@@ -192,6 +214,8 @@ class DataRepository:
                     "source_api": stmt.excluded.source_api,
                     "date_column": stmt.excluded.date_column,
                     "value_column": stmt.excluded.value_column,
+                    "unit_type": stmt.excluded.unit_type,
+                    "unit_desc": stmt.excluded.unit_desc,
                     "updated_at": now,
                 },
             )
@@ -200,7 +224,7 @@ class DataRepository:
         return record
 
     def get_indicator_map(self, indicator_key: str) -> dict | None:
-        """读取单个指标的获信映射；无则 None"""
+        """读取单个指标的获信映射（含口径语义）；无则 None"""
         with Session(self.engine) as session:
             m = session.execute(
                 select(IndicatorMap).where(
@@ -214,14 +238,23 @@ class DataRepository:
             "source_api": m.source_api,
             "date_column": m.date_column,
             "value_column": m.value_column,
+            "unit_type": m.unit_type,
+            "unit_desc": m.unit_desc,
         }
 
-    def auto_adopt_indicator(self, indicator_key: str, table_name: str) -> dict | None:
+    def auto_adopt_indicator(
+        self,
+        indicator_key: str,
+        table_name: str,
+        unit_type: str | None = None,
+        unit_desc: str | None = None,
+    ) -> dict | None:
         """同步成功后自动沿用：该指标未设获信源、且当前表能明确解析数值列时，
         自动把当前表设为获信源。不覆盖用户已手动的选择。
 
         strict 解析：只接受明确的数值列名（今值/现值/value 等），避免把
         OHLC 行情表（open/close/volume）第一个数值列误当指标值。
+        unit_type/unit_desc 透传给 set_indicator（从源节点配置取存储值口径）。
         """
         if not indicator_key or not self.table_exists(table_name):
             return None
@@ -231,7 +264,9 @@ class DataRepository:
         value_col = self._resolve_value_column(table_name, strict=True)
         if not date_col or not value_col:
             return None
-        return self.set_indicator(indicator_key, table_name)
+        return self.set_indicator(
+            indicator_key, table_name,
+            unit_type=unit_type, unit_desc=unit_desc)
 
     def get_indicator(
         self,
@@ -278,7 +313,10 @@ class DataRepository:
         return out.sort_values("date", ascending=False).reset_index(drop=True)
 
     def indicator_candidates(self, indicator_key: str) -> list[dict]:
-        """收集目录中含指定 indicator 键的所有源（供 UI 选择获信源）"""
+        """收集目录中含指定 indicator 键的所有源（供 UI 选择获信源）
+
+        附带源节点的口径语义（unit_type/unit_desc），UI 切换获信源时一并带上。
+        """
         out = []
         for src in self.get_all_enabled_sources():
             if src.get("indicator") == indicator_key:
@@ -287,6 +325,8 @@ class DataRepository:
                     "name": src.get("name", ""),
                     "source_key": src.get("source_key", ""),
                     "api_source": src.get("api_source", ""),
+                    "unit_type": str(src.get("unit_type", "level")),
+                    "unit_desc": src.get("unit_desc") or "",
                 })
         return out
 
@@ -335,6 +375,30 @@ class DataRepository:
                     select(SyncJob).where(SyncJob.enabled.is_(True))
                 ).scalars().all()
             )
+
+    def update_sync_heartbeat(
+        self,
+        module_name: str,
+        running_status: str,
+        heartbeat: "datetime | None" = None,
+    ) -> bool:
+        """轻量更新长任务运行状态/心跳（P1）
+
+        仅当任务行已存在时更新（不存在跳过返回 False）——长任务启动时行可能
+        尚未建立，最终 update_sync_job 会完整建档。逐交易日刷新一次，开销极小。
+        """
+        with Session(self.engine) as session:
+            existing = session.execute(
+                select(SyncJob).where(SyncJob.module_name == module_name)
+            ).scalar_one_or_none()
+            if existing is None:
+                return False
+            existing.running_status = running_status
+            if heartbeat is not None:
+                existing.last_heartbeat = heartbeat
+            existing.updated_at = _now_utc()
+            session.commit()
+            return True
 
     # ------------------------------------------------------------------
     # 查询辅助

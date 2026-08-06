@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """数据源新鲜度逻辑测试"""
 
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -12,6 +12,9 @@ from src.core.freshness import (
     get_stale_status,
     collect_source_freshness,
     infer_expected_days_from_dates,
+    is_heartbeat_stale,
+    running_heartbeat_label,
+    HEARTBEAT_STALE_MINUTES,
 )
 
 
@@ -159,6 +162,72 @@ def test_collect_status_fields():
     assert ok.status_label == "✅ 正常"
     assert ok.status_color.startswith("#")
     assert ok.days_text.endswith("天前")
+
+
+# ---------------------------------------------------------------------------
+# P1 长任务心跳 / 僵死检测
+# ---------------------------------------------------------------------------
+
+
+def test_is_heartbeat_stale_cases():
+    now = datetime(2026, 8, 6, 12, 0, 0)
+    # 非 running → 永不失活
+    assert is_heartbeat_stale("idle", None, now) is False
+    assert is_heartbeat_stale("", None, now) is False
+    # running 但从未心跳 → 疑似僵死
+    assert is_heartbeat_stale("running", None, now) is True
+    # running + 心跳过期（> 10 分钟）
+    old = now - timedelta(minutes=HEARTBEAT_STALE_MINUTES + 1)
+    assert is_heartbeat_stale("running", old, now) is True
+    # running + 心跳新鲜
+    fresh = now - timedelta(minutes=HEARTBEAT_STALE_MINUTES - 1)
+    assert is_heartbeat_stale("running", fresh, now) is False
+
+
+def test_running_heartbeat_label_cases():
+    now = datetime(2026, 8, 6, 12, 0, 0)
+    assert running_heartbeat_label("idle", None, now) == (None, None)
+    assert running_heartbeat_label("running", None, now)[0] == "疑似僵死"
+    fresh = now - timedelta(minutes=1)
+    assert running_heartbeat_label("running", fresh, now) == ("运行中", "#1e88e5")
+    stale = now - timedelta(minutes=HEARTBEAT_STALE_MINUTES + 5)
+    assert running_heartbeat_label("running", stale, now) == ("疑似僵死", "#8b0000")
+
+
+class _FakeRepoRunning(_FakeRepo):
+    """带 running 状态的假 repo（fund_etf_daily 任务 running + 心跳过期）"""
+    def get_sync_job(self, module_name):
+        if module_name == "fund_etf_daily":
+            job = _FakeSyncJob(date(2026, 8, 6))
+            job.running_status = "running"
+            job.last_heartbeat = datetime.now() - timedelta(minutes=30)
+            return job
+        return super().get_sync_job(module_name)
+
+    def table_exists(self, table_name):
+        return table_name == "fund_etf_daily" or super().table_exists(table_name)
+
+
+class _FakeRegistryRunning(_FakeRegistry):
+    def get_all_sources(self, include_deprecated=True):
+        srcs = super().get_all_sources(include_deprecated=include_deprecated)
+        srcs.append({
+            "source_key": "fund.etf_daily", "name": "ETF基金日线",
+            "table_name": "fund_etf_daily", "api_function": "fund_daily",
+            "schedule_cron": "0 22 * * 1-5",
+        })
+        return srcs
+
+
+def test_collect_surfaces_running_heartbeat():
+    """running 且心跳过期的任务 → 新鲜度快照带 running 字段，标签为疑似僵死"""
+    rows = collect_source_freshness(
+        _FakeRepoRunning(), _FakeRegistryRunning(), date(2026, 8, 6))
+    fund = next(r for r in rows if r.source_key == "fund.etf_daily")
+    assert fund.running_status == "running"
+    assert fund.last_heartbeat is not None
+    label, color = running_heartbeat_label(fund.running_status, fund.last_heartbeat)
+    assert label == "疑似僵死" and color == "#8b0000"
 
 
 class _FakeRepoMonthly:

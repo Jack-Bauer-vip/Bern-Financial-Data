@@ -175,6 +175,43 @@ def test_run_fund_daily_batch_first_run_without_seed(batch_env):
     assert len(repo.query("fund_etf_daily")) == 2
 
 
+def test_run_fund_daily_batch_heartbeat_idle_after(batch_env):
+    """P1 心跳：批量完成后 running_status 回 idle、心跳清空"""
+    today = date.today()
+    d1 = (today - timedelta(days=2)).strftime("%Y%m%d")
+    d2 = (today - timedelta(days=1)).strftime("%Y%m%d")
+    pro = FakePro([d1, d2], {d1: _make_day(d1, 3), d2: _make_day(d2, 4)})
+    engine, repo = batch_env(pro)
+
+    engine.run_fund_daily_batch()
+    job = repo.get_sync_job("fund_etf_daily")
+    assert job is not None
+    assert job.running_status == "idle"
+    assert job.last_heartbeat is None
+    assert job.status == "completed"
+
+
+def test_update_sync_heartbeat_only_when_exists(batch_env):
+    """P1 心跳：任务行存在时更新 running/心跳；不存在时返回 False 不建行"""
+    engine, repo = batch_env(FakePro([], {}), seed_table=False)
+    # 无任务行 → 不创建、返回 False
+    assert repo.update_sync_heartbeat("fund_etf_daily", "running") is False
+    assert repo.get_sync_job("fund_etf_daily") is None
+
+    # 建任务行后再更新
+    from datetime import datetime
+    repo.update_sync_job("fund_etf_daily", {
+        "display_name": "ETF基金日线", "category": "基金",
+        "api_source": "tushare", "api_function": "fund_daily",
+        "status": "completed", "enabled": True,
+    })
+    assert repo.update_sync_heartbeat(
+        "fund_etf_daily", "running", datetime.now()) is True
+    job = repo.get_sync_job("fund_etf_daily")
+    assert job.running_status == "running"
+    assert job.last_heartbeat is not None
+
+
 # ---------------------------------------------------------------------------
 # 回溯模式（start_date 给定）— 补历史全市场 + 跳过已全市场覆盖日期
 # ---------------------------------------------------------------------------
