@@ -1,5 +1,6 @@
 """数据表格视图 — Pandas DataFrame 模型与 QTableView 封装（Phase 2 增强版）"""
 
+import numpy as np
 import pandas as pd
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtWidgets import (
@@ -8,43 +9,91 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QClipboard
 
 
+def sort_df_by_date_desc(df: pd.DataFrame) -> pd.DataFrame:
+    """按日期列倒序排列（最新在前）；无日期列则原样返回
+
+    从 loadDataFrame 抽出供后台 QueryWorker 使用——排序不再占用主线程。
+    """
+    if df is None or df.empty:
+        return df
+    date_col = None
+    for col in df.columns:
+        col_lower = col.lower().strip()
+        if any(kw in col_lower for kw in
+               ("date", "时间", "日期", "月份", "trade_date", "datetime")):
+            date_col = col
+            break
+    if date_col is not None:
+        try:
+            # 统一转 datetime 再排序
+            sort_series = pd.to_datetime(df[date_col], errors="coerce")
+            if sort_series.notna().any():
+                return df.iloc[sort_series.argsort()[::-1]].reset_index(drop=True)
+        except Exception:
+            pass
+    return df
+
+
 class PandasModel(QAbstractTableModel):
-    """将 pandas DataFrame 适配为 Qt Model/View 模型"""
+    """将 pandas DataFrame 适配为 Qt Model/View 模型
+
+    ★ 性能要点：data() 是绘制路径上的热点，Qt 每画一个单元格都会调用它多次。
+    早期实现对每个单元格都执行 self._data.iloc[:, col].dtype（复制整列 O(行数)）
+    和 self._data.iloc[row, col]，5000 行大表滚动/重绘时明显卡顿。
+    现改为 setDataFrame 时一次性把列值转成 Python 列表并缓存「是否数值列」标志，
+    data() 只做纯列表索引（O(1)），绘制路径完全不再触碰 pandas。
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._data = pd.DataFrame()
+        self._columns: list = []
+        self._col_values: list = []   # 列优先: _col_values[col][row]
+        self._numeric_cols: list = []
+        self._row_count = 0
 
     def setDataFrame(self, df: pd.DataFrame) -> None:
         """设置新数据并通知视图刷新"""
         self.beginResetModel()
         self._data = df.copy()
+        self._row_count = df.shape[0]
+        self._columns = list(df.columns)
+        # ★ 一次性把列值转成 Python 列表（向量化 tolist），绘制路径用纯列表索引
+        self._col_values = [
+            df.iloc[:, i].tolist() for i in range(df.shape[1])
+        ]
+        self._numeric_cols = [
+            pd.api.types.is_numeric_dtype(df.iloc[:, i])
+            for i in range(df.shape[1])
+        ]
         self.endResetModel()
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if parent.isValid():
             return 0
-        return self._data.shape[0]
+        return self._row_count
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if parent.isValid():
             return 0
-        return self._data.shape[1]
+        return len(self._columns)
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
 
         if role == Qt.ItemDataRole.DisplayRole:
-            val = self._data.iloc[index.row(), index.column()]
-            # 格式化浮点数
-            if isinstance(val, float):
-                return f"{val:.4f}" if abs(val) < 10000 else f"{val:.2f}"
+            val = self._col_values[index.column()][index.row()]
+            # 格式化浮点数（NaN/None 一律显示为空串，与旧实现一致）
+            if isinstance(val, (float, np.floating)):
+                if pd.isna(val):
+                    return ""
+                v = float(val)
+                return f"{v:.4f}" if abs(v) < 10000 else f"{v:.2f}"
             return str(val) if pd.notna(val) else ""
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
-            col_type = self._data.iloc[:, index.column()].dtype
-            if pd.api.types.is_numeric_dtype(col_type):
+            if self._numeric_cols[index.column()]:
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return int(Qt.AlignmentFlag.AlignCenter)
 
@@ -58,9 +107,9 @@ class PandasModel(QAbstractTableModel):
     ):
         if role == Qt.ItemDataRole.DisplayRole:
             if orientation == Qt.Orientation.Horizontal:
-                return str(self._data.columns[section])
+                return str(self._columns[section])
             elif orientation == Qt.Orientation.Vertical:
-                return str(self._data.index[section] + 1)
+                return str(section + 1)
         return None
 
     def getDataFrame(self) -> pd.DataFrame:
@@ -111,28 +160,14 @@ class DataTableView(QTableView):
     # 数据加载
     # ------------------------------------------------------------------
 
-    def loadDataFrame(self, df: pd.DataFrame) -> None:
+    def loadDataFrame(self, df: pd.DataFrame, already_sorted: bool = False) -> None:
         """加载并显示 DataFrame 数据，完成后自动调整列宽
 
         自动按日期列倒序排列（最新数据在前）。
+        already_sorted=True：调用方（后台 QueryWorker）已排好序，跳过排序省主线程时间。
         """
-        if not df.empty:
-            # 自动识别日期列并按倒序排列
-            date_col = None
-            for col in df.columns:
-                col_lower = col.lower().strip()
-                if any(kw in col_lower for kw in
-                       ("date", "时间", "日期", "月份", "trade_date", "datetime")):
-                    date_col = col
-                    break
-            if date_col is not None:
-                try:
-                    # 统一转 datetime 再排序
-                    sort_series = pd.to_datetime(df[date_col], errors="coerce")
-                    if sort_series.notna().any():
-                        df = df.iloc[sort_series.argsort()[::-1]].reset_index(drop=True)
-                except Exception:
-                    pass
+        if not df.empty and not already_sorted:
+            df = sort_df_by_date_desc(df)
         self.pandas_model.setDataFrame(df)
         if not df.empty:
             self._resize_columns(df)
@@ -142,15 +177,22 @@ class DataTableView(QTableView):
         self.pandas_model.setDataFrame(pd.DataFrame())
 
     def _resize_columns(self, df: pd.DataFrame) -> None:
-        """智能调整列宽：内容宽 + 表头宽 取最大值"""
+        """智能调整列宽：内容宽 + 表头宽 取最大值
+
+        复用 PandasModel 已缓存的列值（纯 Python 列表），避免每列再做 pandas 提取。
+        """
         header = self.horizontalHeader()
+        col_values = getattr(self.pandas_model, "_col_values", [])
+        sample = 60
         for i, col_name in enumerate(df.columns):
-            # 估算内容最大宽度（取前 100 行）
-            sample = df.iloc[:100, i].dropna().astype(str)
-            if len(sample) > 0:
-                content_width = max(sample.apply(len).max(), len(str(col_name)))
-            else:
-                content_width = len(str(col_name))
+            values = col_values[i][:sample] if i < len(col_values) else []
+            content_width = len(str(col_name))
+            for v in values:
+                if v is None:
+                    continue
+                if isinstance(v, (float, np.floating)) and pd.isna(v):
+                    continue
+                content_width = max(content_width, len(str(v)))
 
             # 每个字符约 10px + padding
             pixel_width = min(content_width * 10 + 20, 300)

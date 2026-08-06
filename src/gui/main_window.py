@@ -28,7 +28,7 @@ from src.core.scheduler import DataScheduler
 from src.api.server import FastAPIServer
 
 from src.gui.tree_widget import DataTreeWidget
-from src.gui.table_view import DataTableView
+from src.gui.table_view import DataTableView, sort_df_by_date_desc
 from src.gui.log_widget import LogWidget
 from src.gui.param_panel import ParamPanel
 from src.gui.init_wizard import InitWizard
@@ -202,6 +202,8 @@ class QueryWorker(QObject):
             df = self.repo.query(
                 self.table_name, filters=self.filters, limit=self.limit,
                 date_from=self.date_from, date_to=self.date_to)
+            # ★ 后台线程完成日期倒序排序，主线程只做 model reset（省 ~100ms/次）
+            df = sort_df_by_date_desc(df)
             self.finished.emit(df)
         except Exception as exc:
             self.error.emit(str(exc))
@@ -1192,7 +1194,8 @@ class MainWindow(QMainWindow):
 
     def _on_query_result(self, source_key: str, df: pd.DataFrame) -> None:
         """数据库查询结果处理"""
-        self.table_view.loadDataFrame(df)
+        # QueryWorker 已在后台排好序，跳过主线程排序
+        self.table_view.loadDataFrame(df, already_sorted=True)
         self._update_row_count(df)
         self.log_widget.write(
             "INFO",
@@ -1523,7 +1526,8 @@ class MainWindow(QMainWindow):
         if self._refresh_pending:
             self._refresh_pending = False
             self._refresh_timer.start()
-        self.table_view.loadDataFrame(df)
+        # QueryWorker 已在后台排好序，跳过主线程排序
+        self.table_view.loadDataFrame(df, already_sorted=True)
         self._update_row_count(df)
 
     def _on_refresh_error(self, err: str) -> None:
