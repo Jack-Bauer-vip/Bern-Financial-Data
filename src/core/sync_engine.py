@@ -45,6 +45,13 @@ def _is_source_busy(table_name: str) -> bool:
     return lock is not None and lock.locked()
 
 
+# 基金批量回溯的「已全市场覆盖」阈值（行/交易日）：
+# 上传子集最高 ~889 行/日；全市场随年份增长——2023 实测 ~1180、2026 ~2089 行/日。
+# 取 1000（落在 889 与 1180 之间的安全空白区）：行数 >= 1000 视为已全市场覆盖，
+# 回溯时跳过（幂等优化，避免重复拉取）；< 1000 的必然是子集/缺漏，需补拉。
+FUND_FULL_MARKET_THRESHOLD = 1000
+
+
 def normalize_ts_code(code: str) -> str:
     """归一化 tushare 代码：有后缀则大写归一，纯 6 位则按前缀推断交易所。
 
@@ -431,10 +438,18 @@ class SyncEngine(QObject):
     # 到今天，逐交易日拉全市场，重命名列后 bulk_upsert。补 N 天只需 N 次调用。
     # ------------------------------------------------------------------
 
-    def run_fund_daily_batch(self) -> int:
+    def run_fund_daily_batch(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> int:
         """按交易日批量补基金日线（全市场入库），返回写入行数
 
-        增量起点：fund_etf_daily 表内全局最大日期 + 1（首次无数据则补近 1 年）。
+        增量模式（start_date=None）：起点 = fund_etf_daily 表内全局最大日期 + 1
+        （首次无数据则补近 1 年），终点 = 今天。
+        回溯模式（start_date 给定）：拉 [start_date, end_date or 今天] 的历史全市场，
+        **跳过已全市场覆盖的日期**（行数 >= FUND_FULL_MARKET_THRESHOLD，幂等优化），
+        用于补手动上传子集之外的新 ETF 历史（如 2023-2025）。
         用 tushare trade_cal 拿交易日，逐日 fund_daily(trade_date=) 全市场拉取。
         """
         table_name = "fund_etf_daily"
@@ -442,18 +457,32 @@ class SyncEngine(QObject):
         if pro is None:
             raise DataFetchError("tushare 不可用（token 未配置或初始化失败）")
 
-        # 增量起点
+        # 起点 / 终点
         max_date = self.repo.get_last_date(table_name, "date")
-        if max_date is None:
-            start = date.today() - timedelta(days=365)
-            self._log("INFO", "[基金批量] 表内无数据，首次回补近 1 年")
+        if start_date is not None:
+            # 回溯模式：显式起始日期，拉历史全市场
+            start = start_date
+            end = end_date or date.today()
+            self._log(
+                "INFO",
+                f"[基金批量] 回溯模式 {start.isoformat()} ~ {end.isoformat()}"
+                f"（跳过已全市场覆盖日期，阈值 {FUND_FULL_MARKET_THRESHOLD} 行/日）",
+            )
         else:
-            start = max_date + timedelta(days=1)
-            self._log("INFO", f"[基金批量] 表内最大日期 {max_date.isoformat()}，增量起点 {start.isoformat()}")
-        end = date.today()
-        if start > end:
-            self._log("INFO", f"[基金批量] 数据已到 {max_date}，无需批量更新")
-            return 0
+            # 增量模式：表内最大日期 + 1 → 今天
+            if max_date is None:
+                start = date.today() - timedelta(days=365)
+                self._log("INFO", "[基金批量] 表内无数据，首次回补近 1 年")
+            else:
+                start = max_date + timedelta(days=1)
+                self._log(
+                    "INFO",
+                    f"[基金批量] 表内最大日期 {max_date.isoformat()}，增量起点 {start.isoformat()}",
+                )
+            end = end_date or date.today()
+            if start > end:
+                self._log("INFO", f"[基金批量] 数据已到 {max_date}，无需批量更新")
+                return 0
 
         # 交易日历
         try:
@@ -470,12 +499,20 @@ class SyncEngine(QObject):
             self._log("INFO", f"[基金批量] {start}~{end} 区间无交易日")
             return 0
 
-        self._log("INFO", f"[基金批量] 待补 {len(trade_days)} 个交易日: {trade_days}")
+        self._log("INFO", f"[基金批量] 待处理 {len(trade_days)} 个交易日")
         self.sync_started.emit("fund.etf_daily")
 
         total = 0
         failed = 0
+        skipped = 0
         for d in trade_days:
+            # 回溯模式：已全市场覆盖的日期跳过（幂等，避免重复拉 2026 全量等）
+            if start_date is not None:
+                iso_d = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+                cnt = self.repo.count_rows_by_date(table_name, "date", iso_d)
+                if cnt >= FUND_FULL_MARKET_THRESHOLD:
+                    skipped += 1
+                    continue
             try:
                 df = pro.fund_daily(trade_date=d)
             except Exception as exc:
@@ -518,7 +555,11 @@ class SyncEngine(QObject):
         except Exception:
             pass
 
-        self._log("INFO", f"[基金批量] 完成，共写入 {total} 行（失败 {failed} 个交易日）")
+        self._log(
+            "INFO",
+            f"[基金批量] 完成，共写入 {total} 行"
+            f"（失败 {failed}，跳过已覆盖 {skipped} 个交易日）",
+        )
         self.sync_completed.emit("fund.etf_daily", total)
         return total
 

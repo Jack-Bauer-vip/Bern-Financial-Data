@@ -359,6 +359,21 @@ class DataRepository:
             result = conn.execute(text(f"SELECT COUNT(*) FROM {safe}"))
             return result.scalar() or 0
 
+    def count_rows_by_date(self, table_name: str, date_column: str, value: str) -> int:
+        """统计某日期列等于指定值的行数（表不存在返回 0）
+
+        供基金批量回溯判断某交易日是否已全市场覆盖（避免重复拉取）。
+        """
+        if not self.table_exists(table_name):
+            return 0
+        safe_t = self._quote_table(table_name)
+        safe_c = self._quote_column(date_column)
+        with self.engine.connect() as conn:
+            result = conn.execute(
+                text(f"SELECT COUNT(*) FROM {safe_t} WHERE {safe_c} = :v"),
+                {"v": value})
+            return result.scalar() or 0
+
     def get_last_date(self, table_name: str, date_column: str = "date") -> date | None:
         """查询指定时间列的最大值（表不存在返回 None）"""
         if not self.table_exists(table_name):

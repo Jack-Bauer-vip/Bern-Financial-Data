@@ -173,3 +173,89 @@ def test_run_fund_daily_batch_first_run_without_seed(batch_env):
     assert total == 2
     assert repo.table_exists("fund_etf_daily")
     assert len(repo.query("fund_etf_daily")) == 2
+
+
+# ---------------------------------------------------------------------------
+# 回溯模式（start_date 给定）— 补历史全市场 + 跳过已全市场覆盖日期
+# ---------------------------------------------------------------------------
+
+
+def _iso(d: str) -> str:
+    """YYYYMMDD → YYYY-MM-DD"""
+    return f"{d[:4]}-{d[4:6]}-{d[6:]}"
+
+
+def test_run_fund_daily_batch_backfill_pulls_history(batch_env):
+    """回溯模式：拉 [start_date, end_date] 内全部缺失交易日，upsert 合并已有子集行"""
+    # 两个 2023 历史交易日（远离 today，确保走回溯而非增量）
+    d1, d2 = "20230601", "20230602"
+    pro = FakePro([d1, d2], {d1: _make_day(d1, 3), d2: _make_day(d2, 4)})
+    engine, repo = batch_env(pro)
+
+    total = engine.run_fund_daily_batch(
+        start_date=date(2023, 6, 1), end_date=date(2023, 6, 30))
+    assert total == 7  # 3 + 4
+
+    rows = repo.query("fund_etf_daily")
+    # 预置 1 行（159915, today-3）+ 回溯 7 行，互不冲突
+    assert len(rows) == 8
+    dates = set(rows["date"])
+    assert "2023-06-01" in dates and "2023-06-02" in dates
+
+
+def test_run_fund_daily_batch_backfill_skips_covered_days(batch_env):
+    """回溯模式：某日行数 >= 阈值(1400) → 视为已全市场覆盖，不调 fund_daily"""
+    d_full, d_partial = "20230603", "20230604"
+    # 预置 d_full 为"已全市场"：直接塞 1400 行（不同 code）
+    engine, repo = batch_env(FakePro([], {}), seed_table=True)
+    schema = DynamicSchemaManager(repo)
+    big = pd.DataFrame({
+        "date": [_iso(d_full)] * 1400,
+        "open": [1.0] * 1400, "high": [1.0] * 1400, "low": [1.0] * 1400,
+        "close": [1.0] * 1400, "volume": [10.0] * 1400,
+        "amount": [100.0] * 1400,
+        "code": [f"{100000 + i:06d}" for i in range(1400)],
+    })
+    schema.ensure_columns("fund_etf_daily", list(big.columns))
+    repo.bulk_upsert("fund_etf_daily", big, unique_columns=["code", "date"])
+
+    # 重建 engine（pro 带计数）
+    calls = []
+
+    class CountingPro(FakePro):
+        def fund_daily(self, trade_date):
+            calls.append(trade_date)
+            return super().fund_daily(trade_date)
+
+    pro = CountingPro([d_full, d_partial],
+                      {d_partial: _make_day(d_partial, 2)})
+    engine2 = SyncEngine(FakeFetcher(pro), repo,
+                         DynamicSchemaManager(repo), ConfigManager())
+
+    total = engine2.run_fund_daily_batch(
+        start_date=date(2023, 6, 3), end_date=date(2023, 6, 30))
+    # d_full(1400行)被跳过 → 只拉 d_partial(2 行)
+    assert total == 2
+    assert d_full not in calls and d_partial in calls
+
+
+def test_run_fund_daily_batch_backfill_skips_recent_full_market(batch_env):
+    """回溯含 2026 全市场日期（>=1400行）→ 跳过；只补子集区间"""
+    d_old, d_new = "20230605", date.today().strftime("%Y%m%d")
+    pro = FakePro([d_old, d_new], {d_old: _make_day(d_old, 2)})
+    engine, repo = batch_env(pro)
+    # 预置 d_new 全市场（1400 行）
+    schema = DynamicSchemaManager(repo)
+    big = pd.DataFrame({
+        "date": [_iso(d_new)] * 1400,
+        "open": [1.0] * 1400, "high": [1.0] * 1400, "low": [1.0] * 1400,
+        "close": [1.0] * 1400, "volume": [10.0] * 1400,
+        "amount": [100.0] * 1400,
+        "code": [f"{200000 + i:06d}" for i in range(1400)],
+    })
+    schema.ensure_columns("fund_etf_daily", list(big.columns))
+    repo.bulk_upsert("fund_etf_daily", big, unique_columns=["code", "date"])
+
+    total = engine.run_fund_daily_batch(
+        start_date=date(2023, 6, 5), end_date=date.today())
+    assert total == 2  # 只补 d_old
