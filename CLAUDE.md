@@ -6,21 +6,22 @@
 
 **项目定位(数据中台三件事)**:① **提取数据**——akshare/tushare/FRED 多源 + 文件导入 + HTML 抓取;② **整理存储**——增量同步、动态 schema、统一去重、指标归一层;③ **分发数据**——FastAPI 通用查询 `/api/v1/data/{table}`,供其他模块/分析系统调用。目标是为个人投研的多个下游系统提供统一、可信、最新的金融数据底座。
 
-**已知下一步优先级**(来自 2026-08-04 工作报告,工作记录模板见 `scripts_gen/reports/`):
-1. 确认 CPI/PPI 类指标口径(FRED 存指数水平值 vs akshare 存变化率)——影响后续所有分析/导出
-2. GUI「全部同步」一键按钮(当前全量同步靠脚本)
-3. 4 个无 FRED 源指标的停更监控(ISM制造业/非制造业、CB信心、NFIB 仍走 akshare 全量重拉)
-4. 验证 FRED 二次增量同步
-5. qwen2.5:7b 模型切换(改 `default.yaml` 一行)
-6. 指标管理中心每行显示数据截止日
+**已知下一步优先级**(2026-08-06 更新;口径/截止日/全部同步进度已落地,见 `docs/DATA_GOVERNANCE.md` 决策记录):
+1. ~~确认 CPI/PPI 口径~~ **已定案**:默认获信源 FRED 优先(level 值),下游消费强制 `?transform=` 派生 → 见 `docs/DATA_GOVERNANCE.md` §1-3
+2. ~~GUI「全部同步」一键按钮~~ **已落地**:P2 状态栏进度条(见 main_window `_on_sync_progress`)
+3. 4 个无 FRED 源指标的停更监控(ISM制造业/非制造业、CB信心、NFIB 仍走 akshare 全量重拉)——健康检查+webhook 已就绪,闭环待观察
+4. 验证 FRED 二次增量同步(实测第二次同步只拉新数据)
+5. qwen2.5:7b 模型切换(改 `default.yaml` 一行)——**按需手动**,现 deepseek-r1:14b 已过 226 测试
+6. ~~指标管理中心每行显示数据截止日~~ **已实现**(第 5 列,`indicator_manager_dialog.py`)
 
 ## 快速命令
 
 ```bash
 pip install -e .[dev]        # 安装(dev 含 pytest)
 python src/main.py           # 启动桌面端(start_bern.bat 等效)
-python -m pytest tests/ -q   # 跑测试(当前 197 个全绿)
+python -m pytest tests/ -q   # 跑测试(当前 226 个全绿)
 python scripts_gen/gen_report.py --date 2026-08-04   # 日报 PDF
+python scripts_gen/vacuum_and_archive.py             # DB 瘦身(默认 500MB 阈值,超才 VACUUM)
 python scripts_gen/check_freshness.py --only-stale   # 数据新鲜度(退出码 1=有停更)
 python scripts_gen/ensure_indexes.py                 # 为 catalog 表建普通索引(幂等)
 python scripts_gen/migrate_index_daily.py            # 一次性修复 index_daily(2014→今)
