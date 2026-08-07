@@ -15,6 +15,7 @@ from src.core.dynamic_schema import DynamicSchemaManager
 from src.core.exceptions import BernError, DataFetchError
 from src.db.repository import DataRepository
 from src.utils.config import ConfigManager
+from src.utils.date_parse import normalize_cn_date_str
 from src.utils.logger import logger
 
 
@@ -96,12 +97,6 @@ _FUND_KEEP_COLUMNS = ("date", "open", "high", "low", "close", "volume", "amount"
 _PREFERRED_CANONICAL = ("date", "open", "high", "low", "close", "volume",
                         "amount", "code", "symbol")
 
-# 季度序号映射（汉字 + 阿拉伯数字）；用于 akshare 季度日期归一化
-_QUARTER_NUM = {"一": 1, "二": 2, "三": 3, "四": 4,
-                "1": 1, "2": 2, "3": 3, "4": 4}
-_QUARTER_RE = re.compile(r"(?:第?\s*([1-4一二三四])\s*季度|[Qq]\s*([1-4]))")
-
-
 def _apply_column_map(
     df: pd.DataFrame,
     column_map: dict | None,
@@ -161,6 +156,11 @@ class SyncEngine(QObject):
     sync_completed = Signal(str, int)
     sync_error = Signal(str, str)
     log_message = Signal(str, str)
+
+    @staticmethod
+    def _normalize_cn_date_str(value) -> str:
+        """兼容旧入口：中文日期归一化已迁移至 src.utils.date_parse"""
+        return normalize_cn_date_str(value)
 
     def __init__(
         self,
@@ -691,35 +691,6 @@ class SyncEngine(QObject):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _normalize_cn_date_str(value) -> str:
-        """把中文年月日/季度字符串归一化为 pd.to_datetime 可解析的形式
-
-        覆盖 akshare 常见格式：
-        2008年01月 / 2008年1月 → 2008-01（年+月、无日）
-        2008年01月15日 → 2008-01-15
-        2009第4季度 / 2009年第4季度 / 2009年第四季度 / 2009Q4 → 2009-12（季度末月）
-        非字符串 / 无中文日期字样的原样返回。
-        """
-        if not isinstance(value, str):
-            return value
-        s = value.strip()
-        # 季度优先：显式解析为季度末月（3/6/9/12）。
-        # 注意 replace("年","-") 链对 "2009第4季度" 产不出 ISO，且该串不含"年月日"
-        # 会被下方的中文检测挡掉，故需在此先行匹配（含纯 ASCII 的 2009Q4）。
-        m = _QUARTER_RE.search(s)
-        if m:
-            ym = re.search(r"(\d{4})", s)
-            if ym:
-                q = _QUARTER_NUM.get(m.group(1) or m.group(2), 1)
-                return f"{ym.group(1)}-{q * 3:02d}"
-        if not any(c in s for c in "年月日"):
-            return s
-        s = s.replace("年", "-").replace("月", "-").replace("日", "")
-        # 去掉尾部残留分隔符（无日期的年月会留下 "2008-01-"）
-        s = re.sub(r"[-/]+$", "", s).strip()
-        return s
-
-    @staticmethod
     def _clean_data(df: pd.DataFrame) -> pd.DataFrame:
         """标准化数据：删除全空行、转换日期列
 
@@ -743,7 +714,7 @@ class SyncEngine(QObject):
                     # 注意：pandas 3.x 字符串列是 str dtype 而非 object，须用
                     # is_string_dtype 判断，否则归一化被跳过 → 整列变 NaT。
                     if pd.api.types.is_string_dtype(df[col]):
-                        df[col] = df[col].map(SyncEngine._normalize_cn_date_str)
+                        df[col] = df[col].map(normalize_cn_date_str)
                     df[col] = pd.to_datetime(df[col], errors="coerce")
                     # 若全部为 00:00:00 则统一为 date 类型（不含时间部分）
                     clean = df[col].dropna()

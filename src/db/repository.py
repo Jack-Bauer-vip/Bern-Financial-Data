@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.utils.config import ConfigManager
+from src.utils.date_parse import normalize_cn_date_str
 from src.db.models import (
     Base, SyncJob, ColumnRegistry, CacheEntry, IndicatorMap, utcnow,
 )
@@ -452,7 +453,18 @@ class DataRepository:
             if val is None:
                 return None
             if isinstance(val, str):
-                return date.fromisoformat(val)
+                # 标准 ISO 日期直接解析；中文日期（akshare 宏观源常见
+                # "2026年07月份"）经归一化兜底，解析失败返回 None（不抛，
+                # 避免 freshness / 指标截止日对话框崩溃）。
+                try:
+                    return date.fromisoformat(val)
+                except ValueError:
+                    pass
+                norm = normalize_cn_date_str(val)
+                try:
+                    return pd.to_datetime(norm, errors="raise").date()
+                except (ValueError, TypeError):
+                    return None
             if isinstance(val, datetime):
                 return val.date()
             return val
