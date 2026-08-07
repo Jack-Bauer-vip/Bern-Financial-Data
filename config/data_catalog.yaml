@@ -493,6 +493,7 @@ categories:
       table_name: macro_euro_cpi_yoy
       params: {}
       schedule_cron: 0 15 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），无 FRED 替代，保留历史
     - name: 欧元区GDP
       source_key: macro.eu.gdp_yoy
       api_source: akshare
@@ -500,6 +501,7 @@ categories:
       table_name: macro_euro_gdp_yoy
       params: {}
       schedule_cron: 0 15 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），无 FRED 替代，保留历史
     - name: 欧元区制造业PMI
       source_key: macro.eu.manufacturing_pmi
       api_source: akshare
@@ -507,6 +509,7 @@ categories:
       table_name: macro_euro_manufacturing_pmi
       params: {}
       schedule_cron: 0 15 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），无 FRED 替代，保留历史
     - name: 欧元区服务业PMI
       source_key: macro.eu.services_pmi
       api_source: akshare
@@ -514,6 +517,7 @@ categories:
       table_name: macro_euro_services_pmi
       params: {}
       schedule_cron: 0 15 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），无 FRED 替代，保留历史
     - name: 欧元区失业率
       source_key: macro.eu.unemployment_rate
       api_source: akshare
@@ -521,6 +525,7 @@ categories:
       table_name: macro_euro_unemployment_rate_mom
       params: {}
       schedule_cron: 0 15 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），无 FRED 替代，保留历史
     - name: 欧元区零售销售
       source_key: macro.eu.retail_sales
       api_source: akshare
@@ -528,6 +533,7 @@ categories:
       table_name: macro_euro_retail_sales_mom
       params: {}
       schedule_cron: 0 15 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），无 FRED 替代，保留历史
     - name: 欧元区贸易帐
       source_key: macro.eu.trade_balance
       api_source: akshare
@@ -535,6 +541,7 @@ categories:
       table_name: macro_euro_trade_balance
       params: {}
       schedule_cron: 0 15 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），无 FRED 替代，保留历史
     - name: 欧元区Sentix投资者信心
       source_key: macro.eu.sentix_confidence
       api_source: akshare
@@ -542,6 +549,7 @@ categories:
       table_name: macro_euro_sentix_investor_confidence
       params: {}
       schedule_cron: 0 15 * * 1-5
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），无 FRED 替代，保留历史
   - name: 🇯🇵 日本经济
     source_key: macro.jp
     children:
@@ -552,6 +560,7 @@ categories:
       table_name: macro_japan_cpi_yearly
       params: {}
       schedule_cron: 0 8 * * 1-5
+      health_check_ignore: true   # 从未成功同步（akshare 参考源），保留 active，健康检查静默
     - name: 日本核心CPI年率
       source_key: macro.jp.core_cpi_yearly
       api_source: akshare
@@ -559,6 +568,7 @@ categories:
       table_name: macro_japan_core_cpi_yearly
       params: {}
       schedule_cron: 0 8 * * 1-5
+      health_check_ignore: true   # 从未成功同步（akshare 参考源），保留 active，健康检查静默
     - name: 日本失业率
       source_key: macro.jp.unemployment_rate
       api_source: akshare
@@ -566,6 +576,7 @@ categories:
       table_name: macro_japan_unemployment_rate
       params: {}
       schedule_cron: 0 8 * * 1-5
+      health_check_ignore: true   # 从未成功同步（akshare 参考源），保留 active，健康检查静默
     - name: 日本央行利率
       source_key: macro.jp.bank_rate
       api_source: akshare
@@ -573,6 +584,7 @@ categories:
       table_name: macro_japan_bank_rate
       params: {}
       schedule_cron: 0 8 * * 1-5
+      health_check_ignore: true   # 从未成功同步（akshare 参考源），保留 active，健康检查静默
   - name: 🇬🇧 英国经济
     source_key: macro.uk
     children:
@@ -614,6 +626,7 @@ categories:
       table_name: macro_china_cpi_yearly
       params: {}
       schedule_cron: 0 10 * * *
+      health_check_ignore: true   # 上游停更（数据止于 2025-09），保留 active，健康检查静默
     - name: 中国CPI月率
       source_key: macro.cn.cpi_monthly
       api_source: akshare
@@ -621,6 +634,7 @@ categories:
       table_name: macro_china_cpi_monthly
       params: {}
       schedule_cron: 0 10 * * *
+      health_check_ignore: true   # 上游停更（数据止于 2025-09），保留 active，健康检查静默
     - name: 中国GDP年率
       source_key: macro.cn.gdp_yearly
       api_source: akshare
@@ -628,6 +642,7 @@ categories:
       table_name: macro_china_gdp_yearly
       params: {}
       schedule_cron: 0 10 * * *
+      health_check_ignore: true   # 上游停更（数据止于 2025-09），保留 active，健康检查静默
     - name: 中国PMI
       source_key: macro.cn.pmi
       api_source: akshare
@@ -666,12 +681,14 @@ categories:
       table_name: macro_australia_cpi_yearly
       params: {}
       schedule_cron: 0 8 * * 1-5
+      health_check_ignore: true   # 从未同步（参考源），保留 active，健康检查静默
 - name: 股票数据
   icon: chart
   schedule_enabled: false
   children:
   - name: A股日线行情
     source_key: stock.a_daily
+    health_check_ignore: true   # 需手动输入 symbol 按需拉取，表级新鲜度无意义，健康检查静默
     api_source: akshare
     api_function: stock_zh_a_hist
     table_name: stock_daily

@@ -11,6 +11,8 @@ from typing import Optional
 
 import pandas as pd
 
+from src.utils.date_parse import normalize_cn_date_str
+
 # 长任务僵死判定阈值：running 状态但心跳超过该分钟数未刷新 → 疑似僵死
 HEARTBEAT_STALE_MINUTES = 10
 
@@ -148,6 +150,7 @@ class SourceFreshness:
     days_text: str
     days_since: int | None
     deprecated: bool = False
+    health_check_ignore: bool = False
     running_status: str = "idle"
     last_heartbeat: datetime | None = None
 
@@ -212,7 +215,11 @@ def collect_source_freshness(
                         recent = repo.query(
                             table_name, order_by=f'"{date_col}" DESC', limit=8)
                         if not recent.empty and date_col in recent.columns:
-                            dates = pd.to_datetime(recent[date_col], errors="coerce")
+                            # 中文日期（"2026年07月份"）先归一化再解析，
+                            # 否则整列 NaT → 频率推断失效 → 中国月频源被误报"停更"
+                            dates = pd.to_datetime(
+                                recent[date_col].map(normalize_cn_date_str),
+                                errors="coerce")
                             dates = dates.dropna()
                             expected_days = infer_expected_days_from_dates(dates)
                     except Exception:
@@ -238,6 +245,7 @@ def collect_source_freshness(
             days_text=days_text,
             days_since=days_since,
             deprecated=deprecated,
+            health_check_ignore=bool(src.get("health_check_ignore", False)),
             running_status=running_status,
             last_heartbeat=last_heartbeat,
         ))

@@ -103,7 +103,7 @@ async def health_check(repo=Depends(get_repo)):
         from src.utils.config import ConfigManager
         registry = FetcherRegistry(ConfigManager())
         for f in collect_source_freshness(repo, registry):
-            if f.status_label != "✅ 正常":
+            if f.status_label != "✅ 正常" and not f.health_check_ignore:
                 stale_list.append({
                     "source_key": f.source_key,
                     "name": f.name,

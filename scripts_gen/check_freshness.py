@@ -19,6 +19,15 @@ import json
 import os
 import sys
 
+# Windows GBK 控制台兜底：避免 ✅/⚠️/🔴 等符号 UnicodeEncodeError 崩溃。
+# 仅改 errors（保留原 encoding，中文在 GBK 下仍正常显示），无法编码的字符替换为 '?'。
+for _stream in (sys.stdout, sys.stderr):
+    if _stream and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
 # 确保项目根目录在 sys.path 中（从任意 cwd 运行都能 import src）
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -34,11 +43,21 @@ def _print_table(rows) -> None:
     headers = ["状态", "数据源", "最新日期", "距今天数", "更新频率"]
     widths = [len(h) for h in headers]
     lines = []
+    # 状态符号映射为 ASCII（⚠/✅/🔴 不在 GBK 字符集，老式 Windows 控制台会崩）
+    _symbol_map = {"✅": "[OK]", "⚠️": "[!]", "🔴": "[X]"}
+
+    def _safe(s):
+        if not isinstance(s, str):
+            return s
+        for _k, _v in _symbol_map.items():
+            s = s.replace(_k, _v)
+        return s
+
     for r in rows:
         freq = r.cron if r.cron else "手动"
         lines.append([
-            r.status_label,
-            r.name,
+            _safe(r.status_label),
+            _safe(r.name),
             r.last_date.isoformat() if r.last_date else "从未同步",
             f"{r.days_since}天" if r.days_since is not None else "-",
             freq,
@@ -96,7 +115,9 @@ def main() -> None:
     registry = FetcherRegistry(ConfigManager())
     rows = collect_source_freshness(repo, registry)
 
-    stale = [r for r in rows if r.status_label != "✅ 正常"]
+    # health_check_ignore 源（保留 active 但静默）：不参与停更告警/退出码/webhook
+    stale = [r for r in rows
+             if r.status_label != "✅ 正常" and not r.health_check_ignore]
     if min_days:
         stale = [r for r in stale if (r.days_since or 0) >= min_days]
 

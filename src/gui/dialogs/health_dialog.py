@@ -105,6 +105,11 @@ class HealthDialog(QDialog):
             if h_label:
                 status, status_color = h_label, h_color
 
+            # health_check_ignore 源（保留 active 但静默）：显示为正常，不再飘红；
+            # 运行态异常（疑似僵死）仍如实显示。
+            if f.health_check_ignore and not h_label:
+                status, status_color = "✅ 正常", "#2e7d32"
+
             # 建议操作
             suggestion = self._get_suggestion(
                 status, f.api_function, f.source_key)
