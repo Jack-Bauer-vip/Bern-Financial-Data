@@ -87,7 +87,12 @@ class DataTreeWidget(QTreeWidget):
         """递归构建子节点"""
         for child in children:
             item = QTreeWidgetItem(parent_item)
-            item.setText(0, child.get("name", ""))
+            name = child.get("name", "")
+            # ★ deprecated 源视觉标记：名称后加「 ⛔ 已停更」后缀，让树里一眼
+            #   区分停更源（不参与自动同步/健康告警，但历史数据仍可查）
+            if child.get("deprecated"):
+                name = f"{name} ⛔ 已停更"
+            item.setText(0, name)
 
             sub_children = child.get("children")
             if sub_children:
