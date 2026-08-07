@@ -205,7 +205,7 @@ def collect_source_freshness(
                 cols = repo.get_all_existing_columns(table_name)
                 date_col = next(
                     (c for c in cols if c.lower() in
-                     ("date", "时间", "日期", "月份", "datetime", "trade_date")),
+                     ("date", "时间", "日期", "月份", "季度", "datetime", "trade_date")),
                     None)
                 if date_col:
                     if last_date is None:

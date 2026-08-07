@@ -135,7 +135,7 @@ def test_indicator_candidates(repo):
 
 
 def test_catalog_fred_rollout_pairs():
-    """FRED 铺开：20 个指标 akshare+FRED 成对，FRED 源共 20 个"""
+    """FRED 铺开：us.* 20 个指标 akshare+FRED 成对 + cn.* 4 个官方源，FRED 源共 20 个"""
     from src.core.fetcher_registry import FetcherRegistry
     from src.utils.config import ConfigManager
     from collections import defaultdict
@@ -144,12 +144,91 @@ def test_catalog_fred_rollout_pairs():
     for s in reg.get_all_sources():
         if s.get("indicator"):
             groups[s["indicator"]].append(s["api_source"])
-    # 20 个指标全部 akshare+fred 成对
-    assert len(groups) == 20
-    assert all(len(v) == 2 and set(v) == {"akshare", "fred"} for v in groups.values())
+    # us.* 20 个指标全部 akshare+fred 成对
+    us_groups = {k: v for k, v in groups.items() if k.startswith("us.")}
+    assert len(us_groups) == 20
+    assert all(len(v) == 2 and set(v) == {"akshare", "fred"}
+               for v in us_groups.values())
+    # cn.* 4 个官方活源，仅 akshare（无 FRED 中国源，存官方同比列 unit_type=yoy）
+    cn_groups = {k: v for k, v in groups.items() if k.startswith("cn.")}
+    assert set(cn_groups) == {"cn.cpi", "cn.gdp", "cn.ppi", "cn.m2"}
+    assert all(set(v) == {"akshare"} for v in cn_groups.values())
     # FRED 源总数 20（5 原 + 15 新）
     fred_count = sum(1 for s in reg.get_all_sources() if s.get("api_source") == "fred")
     assert fred_count == 20
+    # cn.* 源在目录中声明 unit_type=yoy（存储值即官方同比）
+    cn_sources = {s["indicator"]: s for s in reg.get_all_sources()
+                  if s.get("indicator", "").startswith("cn.")}
+    assert all(cn_sources[k].get("unit_type") == "yoy" for k in cn_groups)
+
+
+def test_resolve_value_column_prioritizes_yoy():
+    """中国官方宏观表数值列解析：'全国-同比增长' 优先于其他含 '增长' 的列"""
+    import tempfile
+    from sqlalchemy import create_engine, text
+    tmp = tempfile.mktemp(suffix=".db")
+    eng = create_engine(f"sqlite:///{tmp}")
+    r = DataRepository(eng)
+    r.create_tables()
+    with eng.begin() as c:
+        c.execute(text(
+            'CREATE TABLE macro_cn_cpi (id INTEGER PRIMARY KEY AUTOINCREMENT, '
+            '"月份" TEXT, "全国-当月" TEXT, "全国-同比增长" TEXT, '
+            '"全国-环比增长" TEXT, "全国-累计" TEXT, created_at TEXT)'))
+    try:
+        # strict=True：只认明确数值列名，且「同比增长」命中
+        assert r._resolve_value_column("macro_cn_cpi", strict=True) == "全国-同比增长"
+    finally:
+        eng.dispose()
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def test_find_date_column_recognizes_quarter():
+    """GDP 表的「季度」中文日期列可被识别为日期列"""
+    import tempfile
+    from sqlalchemy import create_engine, text
+    tmp = tempfile.mktemp(suffix=".db")
+    eng = create_engine(f"sqlite:///{tmp}")
+    r = DataRepository(eng)
+    r.create_tables()
+    with eng.begin() as c:
+        c.execute(text(
+            'CREATE TABLE macro_cn_gdp (id INTEGER PRIMARY KEY AUTOINCREMENT, '
+            '"季度" TEXT, "国内生产总值-同比增长" TEXT, created_at TEXT)'))
+    try:
+        assert r._find_date_column("macro_cn_gdp") == "季度"
+    finally:
+        eng.dispose()
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def test_get_indicator_chinese_month_table(repo):
+    """get_indicator 读取中文「月份」表：日期归一化后 level 可解析，最新值正确
+
+    回归：此前读路径不归一化中文日期 → 下游 to_datetime 全 NaT → cn.* 返回空。
+    """
+    with repo.engine.begin() as c:
+        c.execute(text(
+            'CREATE TABLE macro_cn_cpi (id INTEGER PRIMARY KEY AUTOINCREMENT, '
+            '"月份" TEXT, "全国-同比增长" TEXT, created_at TEXT)'))
+        c.execute(text(
+            "INSERT INTO macro_cn_cpi (月份, \"全国-同比增长\") VALUES "
+            "('2026年05月份','0.3'),('2026年06月份','1.0')"))
+    repo.set_indicator("cn.cpi", "macro_cn_cpi")
+    df = repo.get_indicator("cn.cpi")
+    assert list(df.columns) == ["date", "value"]
+    # 日期已归一化为 pd.to_datetime 可解析的 ISO 前缀（最新在前）
+    assert df.iloc[0]["date"] == "2026-06"
+    assert str(df.iloc[0]["value"]) == "1.0"
+    # compute_transform("level") 能正常解析（日期已是 Timestamp 兼容格式）；
+    # 内部升序，末行即最新
+    from src.core.transform import compute_transform
+    out = compute_transform(df, "level")
+    assert not out.empty
+    assert out.iloc[-1]["date"] == pd.Timestamp("2026-06-01")
+    assert out.iloc[-1]["value"] == 1.0
 
 
 # ---------------------------------------------------------------------------

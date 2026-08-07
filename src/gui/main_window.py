@@ -243,7 +243,7 @@ class TestWorker(QObject):
         fetcher = DataFetcher(ConfigManager())
 
         test_cases = [
-            ("macro_china_cpi_yearly", {}, "中国CPI"),
+            ("macro_china_cpi", {}, "中国CPI"),
             ("stock_zh_a_hist", {"symbol": "000001", "period": "daily",
                                  "start_date": "20260701", "end_date": "20260728"}, "A股日线"),
         ]
@@ -1103,7 +1103,7 @@ class MainWindow(QMainWindow):
             try:
                 fetcher = DataFetcher(ConfigManager())
                 test_cases = [
-                    ("macro_china_cpi_yearly", {}, "中国CPI"),
+                    ("macro_china_cpi", {}, "中国CPI"),
                     ("stock_zh_a_hist", {"symbol": "000001", "period": "daily",
                                          "start_date": "20260701", "end_date": "20260728"}, "A股日线"),
                 ]

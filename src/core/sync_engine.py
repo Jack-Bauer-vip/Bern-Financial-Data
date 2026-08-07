@@ -744,7 +744,10 @@ class SyncEngine(QObject):
     @staticmethod
     def _extract_max_date(df: pd.DataFrame) -> date | None:
         """从 DataFrame 中自动检测日期列并提取最大日期"""
-        date_candidates = ["date", "日期", "时间", "trade_date", "datetime", "end_date", "start_date"]
+        # 兼容 akshare 中国官方源的「月份」「季度」中文日期列
+        # （"2026年06月份"→2026-06、"2026年第1-2季度"→2026-06）
+        date_candidates = ["date", "日期", "时间", "月份", "季度",
+                           "trade_date", "datetime", "end_date", "start_date"]
         for col in date_candidates:
             if col in df.columns and not df[col].isna().all():
                 try:
@@ -753,7 +756,9 @@ class SyncEngine(QObject):
                         return df[col].max().date()
                     if pd.api.types.is_object_dtype(df[col]) or \
                             pd.api.types.is_string_dtype(df[col]):
-                        parsed = pd.to_datetime(df[col], errors="coerce")
+                        # 先归一化中文年月日/季度（"2026年06月份"），再解析，否则全列 NaT
+                        parsed = pd.to_datetime(
+                            df[col].map(normalize_cn_date_str), errors="coerce")
                         if parsed.notna().any():
                             return parsed.max().date()
                 except Exception:

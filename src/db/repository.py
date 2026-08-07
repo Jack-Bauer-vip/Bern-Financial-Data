@@ -121,7 +121,10 @@ class DataRepository:
         cols = self.get_all_existing_columns(table_name)
         if not cols:
             return None
-        value_keywords = ("今值", "现值", "数值", "value", "当前值")
+        # 「同比增长」置顶：中国官方宏观表数值列是「全国-同比增长」「当月同比增长」等，
+        # 若排在「环比增长」前先命中（目标表均无环比先于同比的情况）。
+        value_keywords = ("同比增长", "同比", "增长",
+                          "今值", "现值", "数值", "value", "当前值")
         for col in cols:
             if any(kw in col.lower() for kw in value_keywords):
                 return col
@@ -308,7 +311,10 @@ class DataRepository:
             return empty
 
         out = pd.DataFrame({
-            "date": df[date_col],
+            # 中文月份/季度列（"2026年06月份"）归一化后再返回，否则下游
+            # compute_transform 的 pd.to_datetime 会全 NaT → 指标返回空。
+            # 对无中文日期字样的 ISO 日期原样返回，不影响 FRED 源。
+            "date": df[date_col].map(normalize_cn_date_str),
             "value": df[value_col],
         })
         return out.sort_values("date", ascending=False).reset_index(drop=True)
@@ -480,7 +486,8 @@ class DataRepository:
         return f"uix_{safe}_{cols}"
 
     # 日期类列名候选（用于把逻辑列名 date 解析到真实列名）
-    DATE_COLUMN_KEYWORDS = ("date", "日期", "时间", "月份", "trade_date", "datetime")
+    DATE_COLUMN_KEYWORDS = ("date", "日期", "时间", "月份", "季度",
+                            "trade_date", "datetime")
 
     def resolve_date_columns(self, table_name: str, columns: list[str]) -> list[str]:
         """把唯一键中的逻辑日期列（date/时间/日期/月份）解析到表中真实存在的列名

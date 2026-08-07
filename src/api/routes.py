@@ -235,7 +235,7 @@ def _filter_by_date_range(df, start_date: str = None, end_date: str = None):
         return df
 
     date_col = None
-    for candidate in ("date", "日期", "时间", "月份", "trade_date", "TRADE_DATE"):
+    for candidate in ("date", "日期", "时间", "月份", "季度", "trade_date", "TRADE_DATE"):
         if candidate in df.columns:
             date_col = candidate
             break
@@ -278,6 +278,7 @@ async def query_cpi(
     tables = [
         "macro_china_cpi_yearly",
         "macro_china_cpi_monthly",
+        "macro_china_cpi",
         "macro_usa_cpi_yoy",
         "macro_usa_core_cpi_monthly",
         "macro_euro_cpi_yoy",

@@ -626,7 +626,7 @@ categories:
       table_name: macro_china_cpi_yearly
       params: {}
       schedule_cron: 0 10 * * *
-      health_check_ignore: true   # 上游停更（数据止于 2025-09），保留 active，健康检查静默
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有官方活源 macro_china_cpi，保留历史
     - name: 中国CPI月率
       source_key: macro.cn.cpi_monthly
       api_source: akshare
@@ -634,7 +634,7 @@ categories:
       table_name: macro_china_cpi_monthly
       params: {}
       schedule_cron: 0 10 * * *
-      health_check_ignore: true   # 上游停更（数据止于 2025-09），保留 active，健康检查静默
+      deprecated: true   # 上游聚合站停更（数据止于 2025-09），已有官方活源 macro_china_cpi，保留历史
     - name: 中国GDP年率
       source_key: macro.cn.gdp_yearly
       api_source: akshare
@@ -642,7 +642,37 @@ categories:
       table_name: macro_china_gdp_yearly
       params: {}
       schedule_cron: 0 10 * * *
-      health_check_ignore: true   # 上游停更（数据止于 2025-09），保留 active，健康检查静默
+      deprecated: true   # 上游聚合站停更（数据止于 2025-07），已有官方活源 macro_china_gdp，保留历史
+    - name: 中国CPI(官方)
+      source_key: macro.cn.cpi
+      api_source: akshare
+      api_function: macro_china_cpi
+      table_name: macro_china_cpi
+      indicator: cn.cpi
+      unit_type: yoy
+      unit_desc: 全国居民消费价格同比增速(%)
+      params: {}
+      schedule_cron: 0 10 * * *
+    - name: 中国GDP(官方)
+      source_key: macro.cn.gdp
+      api_source: akshare
+      api_function: macro_china_gdp
+      table_name: macro_china_gdp
+      indicator: cn.gdp
+      unit_type: yoy
+      unit_desc: 国内生产总值同比增速(%)
+      params: {}
+      schedule_cron: 0 10 * * *
+    - name: 中国PPI(官方)
+      source_key: macro.cn.ppi
+      api_source: akshare
+      api_function: macro_china_ppi
+      table_name: macro_china_ppi
+      indicator: cn.ppi
+      unit_type: yoy
+      unit_desc: 工业生产者出厂价格同比增速(%)
+      params: {}
+      schedule_cron: 0 10 * * *
     - name: 中国PMI
       source_key: macro.cn.pmi
       api_source: akshare
@@ -655,6 +685,9 @@ categories:
       api_source: akshare
       api_function: macro_china_money_supply
       table_name: macro_china_money_supply
+      indicator: cn.m2
+      unit_type: yoy
+      unit_desc: 广义货币M2同比增速(%)
       params: {}
       schedule_cron: 0 10 * * *
     - name: 中国LPR利率

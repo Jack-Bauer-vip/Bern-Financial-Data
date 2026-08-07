@@ -74,6 +74,36 @@ def test_clean_data_quarter_non_iso_string():
     assert SyncEngine._normalize_cn_date_str(12345) == 12345
 
 
+def test_extract_max_date_chinese_month():
+    """_extract_max_date 识别中文「月份」列（'2026年06月份'→2026-06-01）"""
+    df = pd.DataFrame({
+        "月份": ["2026年05月份", "2026年06月份"],
+        "全国-同比增长": [0.3, 1.0],
+    })
+    assert SyncEngine._extract_max_date(df) == pd.Timestamp("2026-06-01").date()
+
+
+def test_extract_max_date_quarter():
+    """_extract_max_date 识别中文「季度」列（'2026年第2季度'→2026-06-01）"""
+    df = pd.DataFrame({
+        "季度": ["2025年第4季度", "2026年第2季度"],
+        "国内生产总值-同比增长": [5.0, 4.8],
+    })
+    assert SyncEngine._extract_max_date(df) == pd.Timestamp("2026-06-01").date()
+
+
+def test_extract_max_date_iso_fallback():
+    """无中文日期列时按 ISO 列解析（回归保护）"""
+    df = pd.DataFrame({"date": ["2026-01-01", "2026-02-01"], "value": [1, 2]})
+    assert SyncEngine._extract_max_date(df) == pd.Timestamp("2026-02-01").date()
+
+
+def test_extract_max_date_no_parseable_returns_none():
+    """无任何可解析日期列 → None（不误写 last_sync_date=today）"""
+    df = pd.DataFrame({"value": [1, 2, 3]})
+    assert SyncEngine._extract_max_date(df) is None
+
+
 def test_clean_data_drops_unparseable_rows():
     """无法解析的日期行被丢弃而非保留 NaT"""
     df = pd.DataFrame({
