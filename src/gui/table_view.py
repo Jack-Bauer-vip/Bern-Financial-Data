@@ -9,6 +9,36 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QClipboard
 
 
+def reorder_columns_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    """重排列序：日期列最前，code/symbol 紧随其后，元数据列（id/created_at/
+    updated_at）放到最后。
+
+    基金/指数/股票表原始列序是 id 在最前、code 在倒数第二，用户查询时第一
+    眼只看到自增 id，找不到基金代码，难以识别。重排后日期+代码在左侧，行情
+    列居中，id/created_at 等元数据靠右。仅影响 GUI 显示，不改库内结构。
+    """
+    cols = list(df.columns)
+    if len(cols) < 2:
+        return df
+
+    def _date_col() -> str | None:
+        for c in cols:
+            if any(kw in c.lower().strip() for kw in
+                   ("date", "时间", "日期", "月份", "trade_date", "datetime")):
+                return c
+        return None
+
+    date_col = _date_col()
+    head = [date_col] if date_col else []
+    head += [c for c in ("code", "symbol", "ts_code") if c in cols and c not in head]
+    meta = [c for c in cols if c in ("id", "created_at", "updated_at")]
+    rest = [c for c in cols if c not in head and c not in meta]
+    ordered = head + rest + meta
+    if ordered == cols:
+        return df
+    return df[ordered]
+
+
 def sort_df_by_date_desc(df: pd.DataFrame) -> pd.DataFrame:
     """按日期列倒序排列（最新在前）；无日期列则原样返回
 
@@ -168,6 +198,8 @@ class DataTableView(QTableView):
         """
         if not df.empty and not already_sorted:
             df = sort_df_by_date_desc(df)
+        if not df.empty:
+            df = reorder_columns_for_display(df)
         self.pandas_model.setDataFrame(df)
         if not df.empty:
             self._resize_columns(df)

@@ -951,20 +951,17 @@ class MainWindow(QMainWindow):
             self.log_widget.write("WARNING", f"数据源 [{source_key}] 未配置表名")
             return
 
-        # 代码筛选：优先本地代码下拉，其次输入的 ts_code/symbol/code 参数。
-        # 注意：本地表 code 列存纯数字（如 510300），ts_code 常带 .SH/.SZ 后缀，
-        # 查询前去掉后缀再匹配，否则键入 ts_code 无法命中本地数据。
+        # 代码筛选：只用本地代码下拉（含直接键入）。params_template 的
+        # ts_code/symbol/code **默认值**（如 '159001.SZ'）不是用户意图，
+        # 不能当作查询过滤——否则未显式选择代码的用户查询被窄化到默认
+        # 单只基金/股票，表格里 code 全是同一个值，无法识别。
+        # 查单只代码请在「本地筛选」下拉直接键入。带交易所后缀先去后缀。
         filters: dict = {}
         code_col = self._local_code_column(table_name)
         if code_col:
             local_code = self.param_panel.getSelectedLocalCode()
             if local_code:
-                filters[code_col] = local_code
-            else:
-                for pkey in ("ts_code", "symbol", "code"):
-                    if params.get(pkey):
-                        filters[code_col] = self._strip_code_suffix(params[pkey])
-                        break
+                filters[code_col] = self._strip_code_suffix(local_code)
 
         self.log_widget.write("INFO", f"正在查询本地表 [{table_name}] ...")
         self.statusBar().showMessage(f"查询本地: {source_key} ...")

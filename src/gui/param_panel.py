@@ -213,6 +213,13 @@ class ParamPanel(QWidget):
             return
 
         for field_name, field_cfg in self._current_template.items():
+            # ★ 跳过 start_date/end_date：常驻「日期范围」组是统一入口。
+            # 历史 yaml 里 fund/stock/index 的 params_template 重复定义了这俩
+            # date 控件，getParams() 动态覆盖会让用户改的常驻日期失效
+            # （查询/刷新实际用动态控件的默认值）。此处不渲染，_current_template
+            # 仍保留字段名，避免影响 setParams/记忆恢复对日期范围的识别。
+            if field_name in ("start_date", "end_date"):
+                continue
             control_type = field_cfg.get("type", "text")
             builder = self.CONTROL_TYPE_MAP.get(control_type)
             if builder:
@@ -317,8 +324,10 @@ class ParamPanel(QWidget):
         params["start_date"] = self.date_start.date().toString("yyyyMMdd")
         params["end_date"] = self.date_end.date().toString("yyyyMMdd")
 
-        # 动态参数
+        # 动态参数（start_date/end_date 不在此覆盖常驻日期范围）
         for field_name, widget in self._dynamic_widgets.items():
+            if field_name in ("start_date", "end_date"):
+                continue  # 双重保险：即使动态控件存在也不覆盖常驻日期
             if isinstance(widget, QLineEdit):
                 params[field_name] = widget.text().strip()
             elif isinstance(widget, QDateEdit):
