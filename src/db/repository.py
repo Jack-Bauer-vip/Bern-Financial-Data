@@ -28,6 +28,9 @@ from src.db.models import (
 
 logger = logging.getLogger("bern.db.repository")
 
+# 已注册 SQLite 归一化函数的引擎 id（避免同一引擎重复注册 listener）
+_registered_cn_fn_engines: set[int] = set()
+
 
 def _now_utc() -> datetime:
     """当前 UTC 时间（naive）"""
@@ -39,6 +42,27 @@ class DataRepository:
 
     def __init__(self, engine: Engine):
         self.engine = engine
+        self._register_cn_date_fn(engine)
+
+    @staticmethod
+    def _register_cn_date_fn(engine: Engine) -> None:
+        """为 SQLite 连接注册中文日期归一化自定义函数
+
+        query() 的日期区间过滤对中文「月份/季度」列（"2026年06月份"）需先
+        normalize 成 ISO 再比较——否则 SQL 字符串比较里 '年'(U+5E74) > '-'(U+2D)，
+        同年数据全部被判为大于 ISO 日期，date_to 误杀。注册在每个连接上，
+        幂等（create_function 覆盖同名函数）。
+        """
+        from sqlalchemy import event
+        eid = id(engine)
+        if eid in _registered_cn_fn_engines:
+            return
+        _registered_cn_fn_engines.add(eid)
+
+        @event.listens_for(engine, "connect")
+        def _register(dbapi_connection, connection_record):
+            dbapi_connection.create_function(
+                "normalize_cn_date_str", 1, normalize_cn_date_str)
 
     # ------------------------------------------------------------------
     # 建表
@@ -844,6 +868,16 @@ class DataRepository:
                 return col
         return None
 
+    @staticmethod
+    def _to_iso_date(value: str | None) -> str | None:
+        """YYYYMMDD → YYYY-MM-DD；已带横线/其他格式原样返回"""
+        if not value:
+            return None
+        v = str(value).strip()
+        if len(v) == 8 and v.isdigit():
+            return f"{v[:4]}-{v[4:6]}-{v[6:]}"
+        return v
+
     def query(
         self,
         table_name: str,
@@ -855,7 +889,8 @@ class DataRepository:
     ) -> pd.DataFrame:
         """查询数据表返回 DataFrame（表不存在返回空 DataFrame）
 
-        date_from/date_to : 可选，按自动探测的日期列做区间过滤（ISO 字符串）
+        date_from/date_to : 可选，按自动探测的日期列做区间过滤。
+        接受 YYYYMMDD 或 YYYY-MM-DD；中文「月份/季度」列自动归一化比较。
         """
         if not self.table_exists(table_name):
             return pd.DataFrame()
@@ -870,16 +905,25 @@ class DataRepository:
                 params[f"_{safe_k}"] = value
 
         # 日期区间过滤（按表内第一个日期类列）
+        # 参数先统一转 ISO（GUI/API 传入 YYYYMMDD 或已带横线均可）：
+        #   - ISO 列（date/datetime/trade_date）直接用 SQL 字符串比较（走日期索引）
+        #   - 中文「月份/季度」列（"2026年06月份"）需先 normalize 再比较，
+        #     否则 '年'(U+5E74) > '-'(U+2D) 导致同年数据被 date_to 误杀
         if date_from is not None or date_to is not None:
             date_col = self._find_date_column(table_name)
             if date_col:
                 safe_dc = date_col.replace("\"", "\"\"")
-                if date_from is not None:
-                    where_clauses.append(f'"{safe_dc}" >= :_d_from')
-                    params["_d_from"] = date_from
-                if date_to is not None:
-                    where_clauses.append(f'"{safe_dc}" <= :_d_to')
-                    params["_d_to"] = date_to
+                iso_from = self._to_iso_date(date_from)
+                iso_to = self._to_iso_date(date_to)
+                cn_col = any(k in date_col for k in ("月份", "季度"))
+                expr = (f'normalize_cn_date_str("{safe_dc}")'
+                        if cn_col else f'"{safe_dc}"')
+                if iso_from is not None:
+                    where_clauses.append(f"{expr} >= :_d_from")
+                    params["_d_from"] = iso_from
+                if iso_to is not None:
+                    where_clauses.append(f"{expr} <= :_d_to")
+                    params["_d_to"] = iso_to
 
         sql = f"SELECT * FROM {safe_t}"
         if where_clauses:

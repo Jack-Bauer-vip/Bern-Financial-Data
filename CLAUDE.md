@@ -21,7 +21,7 @@
 ```bash
 pip install -e .[dev]        # 安装(dev 含 pytest)
 python src/main.py           # 启动桌面端(start_bern.bat 等效)
-python -m pytest tests/ -q   # 跑测试(当前 233 个全绿)
+python -m pytest tests/ -q   # 跑测试(当前 237 个全绿)
 python scripts_gen/gen_report.py --date 2026-08-04   # 日报 PDF
 python scripts_gen/vacuum_and_archive.py             # DB 瘦身(默认 500MB 阈值,超才 VACUUM)
 python scripts_gen/check_freshness.py --only-stale   # 数据新鲜度(退出码 1=有停更)

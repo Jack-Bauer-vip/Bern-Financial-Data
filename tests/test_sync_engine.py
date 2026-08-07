@@ -214,3 +214,64 @@ def test_ensure_index_creates_non_unique(repo):
 def test_ensure_index_missing_column_false(repo):
     """表中无该列 → 返回 False（不建索引）"""
     assert repo.ensure_index("macro_test", ["symbol"]) is False
+
+
+# ---------------------------------------------------------------------------
+# 中文「月份/季度」列日期区间过滤（回归：2026-08-07 查询 bug）
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def repo_cn():
+    """临时库，含一张中文「月份」列宏观表 + ISO 列 FRED 风格表"""
+    tmp = tempfile.mktemp(suffix=".db")
+    eng = create_engine(f"sqlite:///{tmp}")
+    r = DataRepository(eng)
+    r.create_tables()
+    with eng.begin() as c:
+        c.execute(text(
+            'CREATE TABLE macro_cn (id INTEGER PRIMARY KEY AUTOINCREMENT, '
+            '"月份" TEXT, "全国-同比增长" TEXT, created_at TEXT)'))
+        c.execute(text(
+            'INSERT INTO macro_cn ("月份", "全国-同比增长") VALUES (:d, :v)'),
+            [{"d": "2025年05月份", "v": "0.1"}, {"d": "2025年08月份", "v": "0.2"},
+             {"d": "2025年12月份", "v": "0.3"}, {"d": "2026年06月份", "v": "1.0"}])
+        c.execute(text(
+            'CREATE TABLE macro_fred (id INTEGER PRIMARY KEY AUTOINCREMENT, '
+            '"date" TEXT, "value" TEXT, created_at TEXT)'))
+        c.execute(text(
+            'INSERT INTO macro_fred (date, value) VALUES (:d, :v)'),
+            [{"d": "2025-05-01", "v": "4"}, {"d": "2025-12-01", "v": "3"},
+             {"d": "2026-06-01", "v": "2"}])
+    yield r
+    eng.dispose()
+    if os.path.exists(tmp):
+        os.remove(tmp)
+
+
+def test_query_cn_month_date_range_iso(repo_cn):
+    """中文「月份」列 + ISO 日期范围：保留 2025-12/2026-06，排除 2025-05
+
+    回归：'2026年06月份' <= '2026-08-07' 的 SQL 字符串比较因 '年'(U+5E74) > '-'
+    恒为 False，导致同年数据被 date_to 全部误杀（查询结果回退到旧年份）。
+    """
+    df = repo_cn.query("macro_cn", date_from="2025-08-07", date_to="2026-08-07")
+    months = df["月份"].tolist()
+    assert months == ["2025年12月份", "2026年06月份"]
+
+
+def test_query_cn_month_date_range_ymd(repo_cn):
+    """GUI 传入 YYYYMMDD 格式同样正确"""
+    df = repo_cn.query("macro_cn", date_from="20250807", date_to="20260807")
+    assert df["月份"].tolist() == ["2025年12月份", "2026年06月份"]
+
+
+def test_query_iso_date_column_unchanged(repo_cn):
+    """ISO 列（FRED 风格）过滤保持正确（走索引的原 SQL 路径）"""
+    df = repo_cn.query("macro_fred", date_from="2025-08-07", date_to="2026-08-07")
+    assert df["date"].tolist() == ["2025-12-01", "2026-06-01"]
+
+
+def test_query_no_date_range_returns_all(repo_cn):
+    """无日期参数 → 全量返回"""
+    assert len(repo_cn.query("macro_cn")) == 4

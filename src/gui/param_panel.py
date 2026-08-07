@@ -85,7 +85,7 @@ class ParamPanel(QWidget):
 
         # ★ 常驻日期范围 — 所有数据源都可见
         self._date_group = QGroupBox("日期范围")
-        date_layout = QHBoxLayout(self._date_group)
+        date_outer = QVBoxLayout(self._date_group)
 
         self.date_start = QDateEdit()
         self.date_start.setCalendarPopup(True)
@@ -97,10 +97,35 @@ class ParamPanel(QWidget):
         self.date_end.setDisplayFormat("yyyy-MM-dd")
         self.date_end.setDate(QDate.currentDate())
 
-        date_layout.addWidget(QLabel("从"))
-        date_layout.addWidget(self.date_start)
-        date_layout.addWidget(QLabel("到"))
-        date_layout.addWidget(self.date_end)
+        range_row = QHBoxLayout()
+        range_row.addWidget(QLabel("从"))
+        range_row.addWidget(self.date_start)
+        range_row.addWidget(QLabel("到"))
+        range_row.addWidget(self.date_end)
+        date_outer.addLayout(range_row)
+
+        # ★ 快捷时间档位：最近1月/1年/3年/全部（点按即改起止日期）
+        quick_row = QHBoxLayout()
+        self.quick_1m = QPushButton("最近1月")
+        self.quick_1y = QPushButton("最近1年")
+        self.quick_3y = QPushButton("最近3年")
+        self.quick_all = QPushButton("全部")
+        quick_style = ("QPushButton { background:#37474F; color:#ECEFF1; "
+                       "padding: 2px 10px; border-radius: 3px; font-size: 11px; }"
+                       "QPushButton:hover { background:#455A64; }")
+        for btn in (self.quick_1m, self.quick_1y, self.quick_3y, self.quick_all):
+            btn.setStyleSheet(quick_style)
+            btn.setFixedHeight(24)
+        self.quick_1m.clicked.connect(lambda: self._apply_preset_range(months=1))
+        self.quick_1y.clicked.connect(lambda: self._apply_preset_range(months=12))
+        self.quick_3y.clicked.connect(lambda: self._apply_preset_range(months=36))
+        self.quick_all.clicked.connect(lambda: self._apply_preset_range(months=None))
+        quick_row.addWidget(self.quick_1m)
+        quick_row.addWidget(self.quick_1y)
+        quick_row.addWidget(self.quick_3y)
+        quick_row.addWidget(self.quick_all)
+        quick_row.addStretch()
+        date_outer.addLayout(quick_row)
 
         layout.addWidget(self._date_group)
 
@@ -303,6 +328,21 @@ class ParamPanel(QWidget):
             elif isinstance(widget, QCheckBox):
                 params[field_name] = widget.isChecked()
         return params
+
+    def _apply_preset_range(self, months: int | None) -> None:
+        """快捷时间档位：months=None 表示「全部」（起始设到数据最早之前）
+
+        1/12/36 分别对应最近1月/1年/3年；结束日期始终为今天。
+        """
+        today = QDate.currentDate()
+        self.date_end.setDate(today)
+        if months is None:
+            # 全部：足够早，覆盖宏观(2008起)/行情(1990起)所有历史
+            self.date_start.setDate(QDate(1990, 1, 1))
+        elif months == 12:
+            self.date_start.setDate(today.addYears(-1))
+        else:
+            self.date_start.setDate(today.addMonths(-months))
 
     def setParams(self, params: dict) -> None:
         """设置参数值（用于恢复记忆的参数）"""
