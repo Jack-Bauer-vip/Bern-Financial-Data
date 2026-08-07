@@ -51,7 +51,7 @@ ai:
   provider: "ollama"
   # 本地 ollama
   ollama_url: "http://localhost:11434"
-  ollama_model: "deepseek-r1:14b"
+  ollama_model: "qwen2.5:7b"
   ollama_timeout: 120        # 秒，AI 识别超时（本地大模型较慢）
   # deepseek API（备用，需要 .env 配 DEEPSEEK_API_KEY）
   deepseek_base_url: "https://api.deepseek.com"
