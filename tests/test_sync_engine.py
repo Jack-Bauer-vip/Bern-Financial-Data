@@ -275,3 +275,28 @@ def test_query_iso_date_column_unchanged(repo_cn):
 def test_query_no_date_range_returns_all(repo_cn):
     """无日期参数 → 全量返回"""
     assert len(repo_cn.query("macro_cn")) == 4
+
+
+def test_query_limit_orders_newest_first(repo_cn):
+    """日期区间 + LIMIT → 返回区间内**最新**行（回归：日频大表被截断到旧日期）
+
+    基金/指数日频表插入序=按 code，非日期序；原实现 LIMIT 先于排序截断，
+    查询结果停在区间最旧的一小段（用户报告「基金查询回到 2025 年」）。
+    """
+    with repo_cn.engine.begin() as c:
+        c.execute(text(
+            'CREATE TABLE fund_x (id INTEGER PRIMARY KEY AUTOINCREMENT, '
+            '"date" TEXT, "code" TEXT, "close" TEXT, created_at TEXT)'))
+        rows = []
+        for code in ("000001", "000002", "000003"):
+            for d in ("2025-08-07", "2025-12-01", "2026-06-01"):
+                rows.append({"d": d, "c": code, "v": "1"})
+        c.execute(text(
+            'INSERT INTO fund_x (date, code, close) VALUES (:d, :c, :v)'), rows)
+    df = repo_cn.query("fund_x", limit=4,
+                       date_from="2025-08-07", date_to="2026-08-07")
+    dates = df["date"].tolist()
+    # 最新在前：3 个 code 的 2026-06-01 + 1 个 code 的 2025-12-01
+    assert dates[0] == "2026-06-01"
+    assert dates.count("2026-06-01") == 3
+    assert dates[3] == "2025-12-01"

@@ -909,27 +909,37 @@ class DataRepository:
         #   - ISO 列（date/datetime/trade_date）直接用 SQL 字符串比较（走日期索引）
         #   - 中文「月份/季度」列（"2026年06月份"）需先 normalize 再比较，
         #     否则 '年'(U+5E74) > '-'(U+2D) 导致同年数据被 date_to 误杀
+        date_filtered = False
+        date_col = None
+        date_expr = None
         if date_from is not None or date_to is not None:
+            date_filtered = True
             date_col = self._find_date_column(table_name)
             if date_col:
                 safe_dc = date_col.replace("\"", "\"\"")
                 iso_from = self._to_iso_date(date_from)
                 iso_to = self._to_iso_date(date_to)
                 cn_col = any(k in date_col for k in ("月份", "季度"))
-                expr = (f'normalize_cn_date_str("{safe_dc}")'
-                        if cn_col else f'"{safe_dc}"')
+                date_expr = (f'normalize_cn_date_str("{safe_dc}")'
+                             if cn_col else f'"{safe_dc}"')
                 if iso_from is not None:
-                    where_clauses.append(f"{expr} >= :_d_from")
+                    where_clauses.append(f"{date_expr} >= :_d_from")
                     params["_d_from"] = iso_from
                 if iso_to is not None:
-                    where_clauses.append(f"{expr} <= :_d_to")
+                    where_clauses.append(f"{date_expr} <= :_d_to")
                     params["_d_to"] = iso_to
 
         sql = f"SELECT * FROM {safe_t}"
         if where_clauses:
             sql += " WHERE " + " AND ".join(where_clauses)
-        if order_by:
-            sql += f" ORDER BY {order_by}"
+        # 日期区间 + LIMIT 而无显式排序时，默认按日期倒序：让 LIMIT 取区间内
+        # **最新** 的行。否则 SQLite 按插入序返回前 N 行（日频大表=区间最旧的
+        # 一小段），再在内存里倒序 → 查询结果被截断到旧日期（基金/日频表问题）。
+        order = order_by
+        if not order and date_filtered and limit is not None and date_expr:
+            order = f"{date_expr} DESC"
+        if order:
+            sql += f" ORDER BY {order}"
         if limit is not None:
             sql += f" LIMIT {limit}"
 

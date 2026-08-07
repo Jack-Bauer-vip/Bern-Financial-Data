@@ -583,7 +583,9 @@ async def query_stock_daily(
 ):
     """查询A股日线行情（需先同步 stock_daily 表）"""
     filters = {"symbol": symbol}
-    df = repo.query("stock_daily", filters=filters, limit=limit)
+    df = repo.query(
+        "stock_daily", filters=filters, limit=limit,
+        date_from=_ymd_to_iso(start_date), date_to=_ymd_to_iso(end_date))
 
     if df.empty:
         return DataResponse(data=[], total=0,
