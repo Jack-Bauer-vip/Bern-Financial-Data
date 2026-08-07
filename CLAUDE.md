@@ -6,13 +6,14 @@
 
 **项目定位(数据中台三件事)**:① **提取数据**——akshare/tushare/FRED 多源 + 文件导入 + HTML 抓取;② **整理存储**——增量同步、动态 schema、统一去重、指标归一层;③ **分发数据**——FastAPI 通用查询 `/api/v1/data/{table}`,供其他模块/分析系统调用。目标是为个人投研的多个下游系统提供统一、可信、最新的金融数据底座。
 
-**已知下一步优先级**(2026-08-06 更新;口径/截止日/全部同步进度已落地,见 `docs/DATA_GOVERNANCE.md` 决策记录):
+**已知下一步优先级**(2026-08-07 更新;口径/截止日/进度条/FRED 二次增量/停更源治理已落地,见 `docs/DATA_GOVERNANCE.md` 决策记录):
 1. ~~确认 CPI/PPI 口径~~ **已定案**:默认获信源 FRED 优先(level 值),下游消费强制 `?transform=` 派生 → 见 `docs/DATA_GOVERNANCE.md` §1-3
 2. ~~GUI「全部同步」一键按钮~~ **已落地**:P2 状态栏进度条(见 main_window `_on_sync_progress`)
-3. 4 个无 FRED 源指标的停更监控(ISM制造业/非制造业、CB信心、NFIB 仍走 akshare 全量重拉)——健康检查+webhook 已就绪,闭环待观察
-4. 验证 FRED 二次增量同步(实测第二次同步只拉新数据)
+3. ~~4 个无 FRED 源指标停更监控~~ **闭环达成**:ISM制造业/ISM非制造业/CB信心/NFIB 已在 08-05 标 deprecated(在 20 个 deprecated 内),健康检查不再告警。2026-08-07 新增 `health_check_ignore` 静默机制(见下「健康检查静默」)承接同类需求
+4. ~~验证 FRED 二次增量同步~~ **已验证(2026-08-07)**:20 个 FRED 源全部走增量模式只拉缺失区间;刚同步过的源再跑返回 0 行;债券日频补到 08-05、周频初请失业金 08-01;月频 7 月值官方未发布(FRED API 直接查证,约 8 月中旬)
 5. qwen2.5:7b 模型切换(改 `default.yaml` 一行)——**按需手动**,现 deepseek-r1:14b 已过 226 测试
 6. ~~指标管理中心每行显示数据截止日~~ **已实现**(第 5 列,`indicator_manager_dialog.py`)
+7. ⏰ **FRED 7 月月频补数(约 8 月中旬)**:CPI/失业率/非农/PPI 等月频仍停 06-01,FRED 官方约 8 月中旬发布 7 月值,届时跑一次增量同步自动补(真增量只拉缺失区间)
 
 ## 快速命令
 
@@ -86,11 +87,12 @@ SyncEngine.run(source_key)                               │  同步/导入/抓�
 | `src/gui/` | PySide6 桌面界面 | `main_window.py` 1781 行(最大),`dialogs/` 各对话框;健康检查复用 `freshness.collect_source_freshness` |
 | `src/importer/` | 文件导入、表识别、列映射、AI 兜底 | `matcher.py` 规则优先+AI 兜底+降级 |
 | `src/scraper/` | HTML 抓取(httpx+BeautifulSoup) | 规则在 `config/scrapers.yaml`,GUI 可管理 |
-| `src/utils/` | 配置、日志、catalog 读写 | `ConfigManager` 单例 |
+| `src/utils/` | 配置、日志、catalog 读写、日期归一化 | `ConfigManager` 单例;`date_parse.py` 中文日期归一化(纯函数,无 PySide6 依赖) |
 
 ## 数据源生命周期 & 数据分发增强(2026-08-05 加固)
 
-- **deprecated 标记**:`data_catalog.yaml` 叶节点加 `deprecated: true`。当前 **20 个**(live 验证):4 个无 FRED 的 akshare 美国源 + 16 个有 FRED 获信源的 akshare 美国宏观源(上游聚合站停更,消费端走 FRED 不受影响);**未标**:cpi_yoy(仍活 2026-07-01)、国债 3 个(新浪源仍活)。三处同步排除:`FetcherRegistry.get_all_enabled_sources()`(repository 委托它)、`scheduler._register_category` 跳过、`run_all` 不再拉。`/sources` 与 `/data/{table}` 响应带 `data_status`(active/deprecated/local)。**注意**:deprecated 源不作为 indicator 获信源候选。
+- **deprecated 标记**:`data_catalog.yaml` 叶节点加 `deprecated: true`。当前 **28 个**(live 验证):4 个无 FRED 的 akshare 美国源 + 16 个有 FRED 获信源的 akshare 美国宏观源 + **8 个欧元区源**(2026-08-07 验证,上游聚合站停更、数据停 2025-09,无 FRED 替代);**未标**:cpi_yoy(仍活 2026-07-01)、国债 3 个(新浪源仍活)。三处同步排除:`FetcherRegistry.get_all_enabled_sources()`(repository 委托它)、`scheduler._register_category` 跳过、`run_all` 不再拉。`/sources` 与 `/data/{table}` 响应带 `data_status`(active/deprecated/local)。**注意**:deprecated 源不作为 indicator 获信源候选。
+- **health_check_ignore(健康检查静默白名单,2026-08-07 新增)**:`data_catalog.yaml` 叶节点加 `health_check_ignore: true`。源**保留 active 身份**(仍可查、可选为获信源、API 可见、继续调度同步),仅健康检查静默:CLI `check_freshness --only-stale`、`/health` stale_sources、GUI 健康对话框(显示为正常)三方过滤,不参与停更告警/退出码/webhook。**当前 7 个**:日本 4(从未同步的参考源)+ 中国 CPI年率/CPI月率/GDP年率(上游停更 300+ 天,保留作参考,无 FRED 替代)。区别于 deprecated:deprecated 是全方位排除,health_check_ignore 只静默告警。
 - **指标派生视图**:`GET /api/v1/indicator/{key}?transform=level|yoy|mom|pct`。`src/core/transform.py` 按日期中位间隔推断频率,yoy/mom 百分比;transform!=level 时先拉全量再算(避免 limit 截断同比前值)。pct=mom 别名。**默认(无 transform 或 level)也 to_numeric 返回 float**(不返回库内字符串)。原值(ODS)永不改,只派生。
 - **内存 TTL 缓存**:`src/core/ttl_cache.py` 进程内缓存 `/indicator`/`/macro`/`/data`(无日期时)。**失效单点**在 `SyncEngine.run()` 成功分支(GUI/全量/定时/API 四路都汇聚于此)。带日期参数时 /data 把区间过滤下沉 SQL(用 `ensure_index` 建的 date+code 复合索引),绕过缓存避免大表「先 limit 再过滤」裁错日期。
 - **新鲜度**:`src/core/freshness.py` 纯函数(从 health_dialog 拆出),供 GUI 对话框/`/health`(返回 stale_sources/stale_count,排除 deprecated)/CLI `check_freshness.py` 三方共用。CLI 可配 webhook(env `FRESHNESS_WEBHOOK_URL`,钉钉/飞书/Server酱 通用)。**预期间隔优先按实际数据频率推断**(`infer_expected_days_from_dates` 复用 `transform.infer_frequency`:月频→32天/季频→95天),替代纯 cron 推断,避免 FRED 月频误报"停更"。
@@ -129,7 +131,7 @@ AI 兜底(ollama deepseek-r1:14b 或 deepseek API; 返回表名必须在校验�
 ## 约定与注意事项
 
 - **新增数据源**:编辑 `config/data_catalog.yaml`(有 GUI)。注意 `column_map` 只对行情类源配;宏观源表保持 API 原生列名。
-- **日期格式**:akshare 常见 `2008年01月`(年+月无日),`_clean_data` 先归一化再 to_datetime;全部解析失败的行丢弃(防 NaT 崩库)。
+- **日期格式**:akshare 常见 `2008年01月`(年+月无日,带"份"尾缀如 `2026年07月份`),统一走 `src/utils/date_parse.py` 的 `normalize_cn_date_str` 归一化再 to_datetime。写入路径(`_clean_data`)、读取路径(freshness 频率推断、`repository.get_last_date` 兜底)三处共用,保证同一格式行为一致;全部解析失败的行丢弃(防 NaT 崩库)。
 - **SQL 安全**:表名/列名来自不可信输入(导入/抓取/用户),写 SQL 必须走 `_quote_table/_quote_column`;API 通用查询端点有白名单校验。
 - **并发**:同步同一数据源受每源锁保护;加列有并发 IntegrityError 兜底(log_column_registry)。
 - **.env 不入库**:TUSHARE_TOKEN / FRED_API_KEY / DEEPSEEK_API_KEY / API_TOKEN。模板见 `.env.example`。
