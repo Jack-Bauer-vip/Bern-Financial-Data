@@ -11,16 +11,17 @@
 2. ~~GUI「全部同步」一键按钮~~ **已落地**:P2 状态栏进度条(见 main_window `_on_sync_progress`)
 3. ~~4 个无 FRED 源指标停更监控~~ **闭环达成**:ISM制造业/ISM非制造业/CB信心/NFIB 已在 08-05 标 deprecated(在 20 个 deprecated 内),健康检查不再告警。2026-08-07 新增 `health_check_ignore` 静默机制(见下「健康检查静默」)承接同类需求
 4. ~~验证 FRED 二次增量同步~~ **已验证(2026-08-07)**:20 个 FRED 源全部走增量模式只拉缺失区间;刚同步过的源再跑返回 0 行;债券日频补到 08-05、周频初请失业金 08-01;月频 7 月值官方未发布(FRED API 直接查证,约 8 月中旬)
-5. qwen2.5:7b 模型切换(改 `default.yaml` 一行)——**按需手动**,现 deepseek-r1:14b 已过 226 测试
+5. ~~qwen2.5:7b 模型切换~~ **已完成(2026-08-07)**:与用户另一系统共用该模型,commit `b9458f9`
 6. ~~指标管理中心每行显示数据截止日~~ **已实现**(第 5 列,`indicator_manager_dialog.py`)
 7. ⏰ **FRED 7 月月频补数(约 8 月中旬)**:CPI/失业率/非农/PPI 等月频仍停 06-01,FRED 官方约 8 月中旬发布 7 月值,届时跑一次增量同步自动补(真增量只拉缺失区间)
+8. 🛠 **打包/分发到其他电脑(待决策,2026-08-07 评估)**:可行,项目对打包友好(GUI 零资源文件/data 自动创建/ollama 缺失优雅降级)。候选路线:PyInstaller `--onedir` 免安装(~800MB,需改造)或绿色 venv 便携包。**前置改造 3 处**:①`logger.py:54` `Path.cwd()` 改数据目录;②路径基于 `__file__` 的 root_dir 与打包只读资源分离(需加 frozen/_MEIPASS 检测);③`start_bern.bat` 硬编码路径改相对。**安全注意**:`.env` 含明文 FRED_API_KEY 且被 git 跟踪(与 .gitignore 声明不符),分发前处理。详见计划备忘录 `humble-greeting-stallman.md` 与记忆文件
 
 ## 快速命令
 
 ```bash
 pip install -e .[dev]        # 安装(dev 含 pytest)
 python src/main.py           # 启动桌面端(start_bern.bat 等效)
-python -m pytest tests/ -q   # 跑测试(当前 226 个全绿)
+python -m pytest tests/ -q   # 跑测试(当前 233 个全绿)
 python scripts_gen/gen_report.py --date 2026-08-04   # 日报 PDF
 python scripts_gen/vacuum_and_archive.py             # DB 瘦身(默认 500MB 阈值,超才 VACUUM)
 python scripts_gen/check_freshness.py --only-stale   # 数据新鲜度(退出码 1=有停更)
