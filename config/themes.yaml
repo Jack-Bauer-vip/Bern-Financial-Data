@@ -1,0 +1,27 @@
+# Bern_Financial_Data 主题看板(定制数据集)配置
+# GUI「数据 → 主题看板」编辑; 字段说明见各键注释
+boards:
+- key: test_01
+  name: 三剑客
+  description: ''
+  date_start: null
+  date_end: null
+  items:
+  - type: code
+    table: fund_etf_daily
+    code_column: code
+    code: '518880'
+    value_column: close
+    name: ETF基金日线
+  - type: code
+    table: fund_etf_daily
+    code_column: code
+    code: '513650'
+    value_column: close
+    name: ETF基金日线
+  - type: code
+    table: fund_etf_daily
+    code_column: code
+    code: '512890'
+    value_column: close
+    name: ETF基金日线

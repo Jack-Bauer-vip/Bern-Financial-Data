@@ -19,7 +19,22 @@ class DataResponse(BaseModel):
     total: int = 0
     source: str = "local_db"
     data_status: str = "active"  # active / deprecated / local
-    meta: Optional[dict] = None  # 附加元信息（如指标口径 unit_type/unit_desc）
+    meta: Optional[dict] = None  # 附加元信息（如指标口径 unit_type/unit_desc / pagination）
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "code": 200,
+                "message": "ok",
+                "data": [{"date": "2026-06-01", "value": 3.4}],
+                "total": 120,
+                "source": "indicator:us.cpi",
+                "data_status": "active",
+                "meta": {"unit_type": "level", "unit_desc": "CPI 指数",
+                         "transform": "level"},
+            }],
+        }
+    }
 
 
 class ErrorResponse(BaseModel):
@@ -36,7 +51,7 @@ class ErrorResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    version: str = "0.1.0"
+    version: str = "0.2.0"
     timestamp: str
     db_rows: int = 0
     scheduler_running: bool = False

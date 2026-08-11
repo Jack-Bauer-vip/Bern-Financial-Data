@@ -98,8 +98,19 @@ class FastAPIServer:
         # 创建 FastAPI 应用
         self.app = FastAPI(
             title="Bern_Financial_Data API",
-            version="0.1.0",
+            version="0.2.0",
             description="本地金融数据查询服务 — 桌面数据中台对外接口",
+            # OpenAPI 分组说明(/docs 左侧 Tags)
+            openapi_tags=[
+                {"name": "系统", "description": "服务健康与连接监控"},
+                {"name": "元数据", "description": "数据源目录与同步状态"},
+                {"name": "宏观数据", "description": "宏观指标原始表查询(白名单)"},
+                {"name": "指标", "description": "统一指标查询(获信源 + level/yoy/mom 派生)"},
+                {"name": "股票数据", "description": "A股日线行情"},
+                {"name": "数据分发", "description": "通用数据表查询(供下游系统, 支持 format=csv)"},
+                {"name": "主题看板", "description": "定制数据集: 预定义指标组合, 按主题键一键拉取快照/时序"},
+                {"name": "同步控制", "description": "触发数据源同步"},
+            ],
         )
 
         self._setup_middleware()
@@ -147,7 +158,7 @@ class FastAPIServer:
         async def root():
             return {
                 "service": "Bern_Financial_Data API",
-                "version": "0.1.0",
+                "version": "0.2.0",
                 "docs": "/docs",
                 "endpoints": [
                     "/api/v1/health",
@@ -158,6 +169,10 @@ class FastAPIServer:
                     "/api/v1/stock/daily",
                     "/api/v1/data/tables",
                     "/api/v1/data/{table_name}",
+                    "/api/v1/indicator/{indicator_key}",
+                    "/api/v1/boards",
+                    "/api/v1/boards/{board_key}",
+                    "/api/v1/boards/{board_key}/snapshot",
                     "/api/v1/sync/{source_key}",
                 ],
             }

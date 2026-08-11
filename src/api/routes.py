@@ -1,10 +1,12 @@
-"""API 路由 — 数据查询、元数据、连接监控、同步控制"""
+"""API 路由 — 数据查询、元数据、连接监控、同步控制、主题看板"""
 
+import io
 import threading
 import time
 from datetime import datetime
 
 from fastapi import APIRouter, Query, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 
 from src.api.schemas import (
     DataResponse, ErrorResponse, HealthResponse,
@@ -485,6 +487,55 @@ def _df_to_json_records(df, limit: int | None = None) -> list[dict]:
     return out
 
 
+def _csv_bytes(df) -> bytes:
+    """DataFrame → CSV bytes(utf-8-sig,带 BOM 供 Excel 直接打开)"""
+    import pandas as pd
+    if df is None or df.empty:
+        df = pd.DataFrame()
+    buf = io.StringIO()
+    df.to_csv(buf, index=False, encoding="utf-8-sig")
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def _csv_response(df, filename: str) -> StreamingResponse:
+    """把 DataFrame 以附件形式返回(stream 流式,大表不占额外内存)"""
+    data = _csv_bytes(df)
+    return StreamingResponse(
+        iter([data]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def _paginate(df, page: int | None, page_size: int | None):
+    """可选分页切片,返回 (切片 DataFrame, 分页元数据 dict | None)
+
+    page_size 恒为 limit(页大小)。page=None 时仅 head(limit) 截断(维持旧行为,
+    无分页元数据);page 给出时按 offset 切片并附带 meta.pagination。
+    """
+    if page_size is None or page_size <= 0:
+        return df, None
+    if page is None:
+        return df.head(page_size), None
+    total = len(df)
+    offset = (page - 1) * page_size
+    sliced = df.iloc[offset: offset + page_size].copy() if offset < total \
+        else df.iloc[0:0].copy()
+    has_more = offset + page_size < total
+    return sliced, {"page": page, "page_size": page_size, "has_more": has_more}
+
+
+def _format_param() -> str:
+    """format 查询参数的公共定义(json|csv,缺省 json)"""
+    return Query("json", pattern=r"^(json|csv)$",
+                 description="响应格式: json(默认) | csv(下载, 带 BOM)")
+
+
+def _page_param() -> int | None:
+    """分页参数公共定义(可选,传了才分页;与 limit 配合做页大小)"""
+    return Query(None, ge=1, description="页码(1 起); 不传则不分页, 返回全部/limit 行")
+
+
 @router.get("/indicator/{indicator_key}", tags=["指标"])
 async def get_indicator(
     indicator_key: str,
@@ -493,6 +544,8 @@ async def get_indicator(
     start_date: str = Query(None, pattern=r"^\d{8}$"),
     end_date: str = Query(None, pattern=r"^\d{8}$"),
     limit: int = Query(5000, le=100000),
+    format: str = _format_param(),
+    page: int | None = _page_param(),
     repo=Depends(get_repo),
 ):
     """统一查询指标（按获信源表），返回 {date, value}
@@ -537,12 +590,19 @@ async def get_indicator(
         df = _filter_by_date_range(df, start_date, end_date)
         df = df.sort_values("date", ascending=False).reset_index(drop=True)
 
+    # 对外协商：format=csv 下载 / ?page= 分页(meta.pagination, total 恒为全量)
+    if format == "csv":
+        return _csv_response(df, f"{indicator_key}.csv")
+    sliced, pagination = _paginate(df, page, limit)
+    meta = {"unit_type": unit_type, "unit_desc": unit_desc,
+            "transform": transform or "level"}
+    if pagination:
+        meta["pagination"] = pagination
     return DataResponse(
-        data=_df_to_json_records(df, limit),
+        data=_df_to_json_records(sliced),
         total=len(df),
         source=f"indicator:{indicator_key}",
-        meta={"unit_type": unit_type, "unit_desc": unit_desc,
-              "transform": transform or "level"},
+        meta=meta,
     )
 
 
@@ -631,6 +691,7 @@ async def query_data_table(
     end_date: str = Query(None, pattern=r"^\d{8}$"),
     limit: int = Query(200, le=100000),
     fields: str = Query(None, description="逗号分隔的字段列表"),
+    format: str = _format_param(),
     repo=Depends(get_repo),
 ):
     """通用数据表查询（数据分发）
@@ -704,11 +765,99 @@ async def query_data_table(
         message = ("未指定日期区间，仅返回前 %d 条；建议带 start_date/end_date"
                    "（YYYYMMDD）以提升性能与精确性" % limit)
 
+    # 对外协商：format=csv 下载(注意 /data 的 limit 已下沉 SQL,不做内存分页)
+    if format == "csv":
+        return _csv_response(df, f"{table_name}.csv")
+
     return DataResponse(
         data=_df_to_json_records(df) if not df.empty else [],
         total=len(df),
         message=message,
         data_status=data_status,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 主题看板(定制数据集)— 预定义指标组合, 按主题键一键拉取
+# ---------------------------------------------------------------------------
+
+
+def _board_store():
+    """懒加载 BoardStore(单例路径;测试可 monkeypatch default_themes_path)"""
+    from src.core.boards import BoardStore
+    return BoardStore()
+
+
+@router.get("/boards", tags=["主题看板"])
+async def list_boards(repo=Depends(get_repo)):
+    """列出全部主题(定制数据集): {key, name, description, item_count, date_start, date_end}
+
+    下游系统先 GET /boards 发现可用主题, 再按 key 拉 /boards/{key} 或 /snapshot。
+    """
+    boards = _board_store().list_boards()
+    return DataResponse(data=boards, total=len(boards), source="boards")
+
+
+@router.get("/boards/{board_key}/snapshot", tags=["主题看板"])
+async def board_snapshot(
+    board_key: str,
+    transform: str = Query(None, pattern=r"^(level|yoy|mom|pct)$",
+                           description="全局覆盖各指标口径(缺省各自配置)"),
+    format: str = _format_param(),
+    repo=Depends(get_repo),
+):
+    """主题每日快照:每指标一行 [指标, 最新日期, 最新值, 环比%, 同比%, 近3期]
+
+    每天打开主题看的核心视图。指标取各自有效口径的最新值, 环比/同比恒派生。
+    """
+    board = _board_store().get_board(board_key)
+    if board is None:
+        raise HTTPException(status_code=404, detail=f"主题 {board_key} 不存在")
+    from src.core.boards import BoardService
+    df = BoardService(repo).snapshot(board, transform)
+    if format == "csv":
+        return _csv_response(df, f"{board_key}_snapshot.csv")
+    return DataResponse(
+        data=_df_to_json_records(df) if not df.empty else [],
+        total=len(df),
+        source=f"board:{board_key}:snapshot",
+    )
+
+
+@router.get("/boards/{board_key}", tags=["主题看板"])
+async def board_series(
+    board_key: str,
+    start_date: str = Query(None, pattern=r"^\d{8}$"),
+    end_date: str = Query(None, pattern=r"^\d{8}$"),
+    transform: str = Query(None, pattern=r"^(level|yoy|mom|pct)$",
+                           description="全局覆盖各指标口径(缺省各自配置)"),
+    limit: int = Query(5000, le=100000),
+    format: str = _format_param(),
+    page: int | None = _page_param(),
+    repo=Depends(get_repo),
+):
+    """主题时间序列(宽表):date 为行、每指标一列, 按日期对齐
+
+    适合看多指标联动走势 / 作为下游系统的时间序列数据源。
+    显式 start_date/end_date 覆盖各 item 级窗口; 无窗口则返回全量(最新在前)。
+    """
+    board = _board_store().get_board(board_key)
+    if board is None:
+        raise HTTPException(status_code=404, detail=f"主题 {board_key} 不存在")
+    from src.core.boards import BoardService
+    df = BoardService(repo).series(
+        board, start_date=start_date, end_date=end_date, transform=transform)
+    if not df.empty:
+        df = df.sort_values("date", ascending=False).reset_index(drop=True)
+    if format == "csv":
+        return _csv_response(df, f"{board_key}.csv")
+    sliced, pagination = _paginate(df, page, limit)
+    meta = {"pagination": pagination} if pagination else None
+    return DataResponse(
+        data=_df_to_json_records(sliced) if not sliced.empty else [],
+        total=len(df),
+        source=f"board:{board_key}",
+        meta=meta,
     )
 
 

@@ -38,6 +38,7 @@ from src.gui.dialogs.schedule_dialog import ScheduleDialog
 from src.gui.dialogs.export_dialog import ExportDialog
 from src.gui.dialogs.health_dialog import HealthDialog
 from src.gui.dialogs.indicator_manager_dialog import IndicatorManagerDialog
+from src.gui.dialogs.board_manager_dialog import BoardManagerDialog
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +474,10 @@ class MainWindow(QMainWindow):
         self.indicator_mgr_action = QAction("📊 指标管理中心", self)
         self.indicator_mgr_action.triggered.connect(self._show_indicator_manager)
         data_menu.addAction(self.indicator_mgr_action)
+
+        self.board_mgr_action = QAction("📋 主题看板", self)
+        self.board_mgr_action.triggered.connect(self._show_board_manager)
+        data_menu.addAction(self.board_mgr_action)
 
         data_menu.addSeparator()
 
@@ -1800,6 +1805,14 @@ class MainWindow(QMainWindow):
     def _show_indicator_manager(self) -> None:
         """打开指标管理中心对话框（集中查看/切换获信源）"""
         dialog = IndicatorManagerDialog(self.repo, self.registry, self)
+        dialog.exec()
+
+    def _show_board_manager(self) -> None:
+        """打开主题看板对话框（定制数据集：选指标/定窗口/看快照/同步）"""
+        dialog = BoardManagerDialog(
+            self.repo, self.registry,
+            sync_engine=self.sync_engine,
+            log_fn=self.log_widget.write, parent=self)
         dialog.exec()
 
     def _trusted_indicator_df(self, source) -> "pd.DataFrame | None":
