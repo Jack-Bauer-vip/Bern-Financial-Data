@@ -110,6 +110,22 @@ def test_set_indicator_preconfig_unsynced_declared(repo):
     assert list(df.columns) == ["date", "value"]
 
 
+def test_set_indicator_rejects_deprecated_table(repo):
+    """deprecated(停更)源不得设为获信源——已定案口径
+
+    即使表存在于库中(akshare 美国宏观 deprecated 表已入库)，set_indicator
+    也必须拒绝，防止 GUI/API/auto_adopt 任何入口把获信源切到停更源。
+    """
+    # macro_usa_core_cpi_monthly 在真实目录中标 deprecated
+    assert repo.set_indicator("us.core_cpi", "macro_usa_core_cpi_monthly",
+                              unit_type="mom", unit_desc="环比") is None
+    # 拒绝后不污染映射
+    assert repo.get_indicator_map("us.core_cpi") is None
+    # active 的 FRED 表不受影响
+    rec = repo.set_indicator("us.core_cpi", "macro_fred_core_cpi")
+    assert rec is not None and rec["preferred_table"] == "macro_fred_core_cpi"
+
+
 def test_meta_indicator_excluded_from_data_tables(repo):
     """meta_indicator 是元数据表，collect_tables 不应暴露为数据表"""
     from src.importer.matcher import collect_tables

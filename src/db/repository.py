@@ -111,6 +111,17 @@ class DataRepository:
         from src.utils.config import ConfigManager
         return FetcherRegistry(ConfigManager()).get_all_enabled_sources()
 
+    def _deprecated_table_names(self) -> set[str]:
+        """目录中标 deprecated 的数据表名集合（获信源校验用）"""
+        from src.core.fetcher_registry import FetcherRegistry
+        from src.utils.config import ConfigManager
+        reg = FetcherRegistry(ConfigManager())
+        return {
+            str(s.get("table_name"))
+            for s in reg.get_all_sources(include_deprecated=True)
+            if s.get("deprecated") and s.get("table_name")
+        }
+
     # ------------------------------------------------------------------
     # 指标归一层（meta_indicator）
     # ------------------------------------------------------------------
@@ -191,6 +202,13 @@ class DataRepository:
         Returns:
             新映射 dict；表既不存在也不在目录 → None
         """
+        # 已定案口径：deprecated(停更)源不得作为指标获信源——其数据已冻结在
+        # 停更日、口径可能还是 mom/yoy，作为统一查询锚会误导下游。GUI 下拉
+        # 也已过滤，这里是防御性兜底（API/auto_adopt 等任何入口都拦）。
+        if table_name in self._deprecated_table_names():
+            logger.warning("拒绝把 deprecated 表设为获信源: %s (indicator=%s)",
+                           table_name, indicator_key)
+            return None
         date_col, value_col = "", ""
         if self.table_exists(table_name):
             date_col = self._find_date_column(table_name) or ""
