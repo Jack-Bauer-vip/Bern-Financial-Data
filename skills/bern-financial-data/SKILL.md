@@ -1,11 +1,11 @@
 ---
 name: bern-financial-data
-description: 当任务需要查询本机 Bern_Financial_Data 金融数据中台的本地数据时使用——行情 K线(基金/股票/指数日线)、宏观指标(CPI/失业率/非农/PPI/FRED 美国序列等)、主题看板每日快照, 统一走本机 FastAPI (http://127.0.0.1:8765/api/v1, X-API-Key 鉴权)。支持复权(adj=qfq|hfq)、派生(transform=yoy|mom|pct)、CSV 下载、分页; 通过 /sources、/data/tables、/indicator、/boards 先发现再查询。仅在需要实际取数时使用: 投资观点讨论、策略问答、纯分析话题等无需查询本地数据库的内容不要加载本 skill。
+description: 当任务需要查询本机 Bern_Financial_Data 金融数据中台的本地数据时使用——行情 K线(基金/股票/指数日线)、宏观指标(CPI/失业率/非农/PPI/FRED 美国序列等)、主题看板每日快照, 统一走本机 FastAPI (http://127.0.0.1:8765/api/v1, X-API-Key 鉴权)。支持复权(adj=qfq|hfq)、派生(transform=yoy|mom|pct)、代码搜索(/api/v1/search, 代码/中文名/拼音)、CSV 下载、分页; 通过 /sources、/data/tables、/indicator、/boards 先发现再查询。仅在需要实际取数时使用: 投资观点讨论、策略问答、纯分析话题等无需查询本地数据库的内容不要加载本 skill。
 origin: custom
-version: 1.0.0
+version: 1.1.0
 ---
 
-# Bern_Financial_Data — 本地金融数据中台查询契约 V1.0.0
+# Bern_Financial_Data — 本地金融数据中台查询契约 V1.1.0
 
 > 本机桌面金融数据中台(SQLite 存储 + FastAPI 分发)。数据**已入库**并有专人维护同步,本 skill 只负责「**怎么查**」——不内嵌取数代码,而是给出**完整可复制的查询契约**。数据清单通过 API 自己的活端点实时发现,不会因目录新增源而过时。
 >
@@ -58,6 +58,7 @@ print(r.json())
 | `GET /api/v1/data/tables` | 当前可查询的全部表名 `[{table_name}]`(含导入表,排除 meta_ 元数据表) | `/data/{table}` 的合法表名白名单 |
 | `GET /api/v1/indicator` | 归一化指标清单: `[{indicator_key, preferred_table, source_api, date_column, value_column, unit_type, unit_desc}]` | 找宏观指标键(如 `us.cpi`),推荐优先走指标端点 |
 | `GET /api/v1/boards` | 主题看板清单: `[{key, name, description, item_count, date_start, date_end}]` | 找主题键,看预定义看板 |
+| `GET /api/v1/search` | 表内代码搜索: `[{code, name, table}]` + `meta.code_column` | 代码/中文名/拼音模糊匹配,拿行情表的 code(供 ?code= 过滤) |
 | `GET /api/v1/health` | `stale_sources` 滞后源 | 了解数据新鲜度,判断「最新」到什么日期 |
 
 **数据类型总览**(当前目录):
@@ -86,7 +87,8 @@ ETF基金日线   → 表 fund_etf_daily (支持 ?adj=, 2700+ 只)
 
 | 端点 | 方法 | 用途 | 关键参数 |
 |---|---|---|---|
-| `/api/v1/data/{table_name}` | GET | **通用数据表查询**(数据分发) | `start_date` `end_date`(YYYYMMDD) `limit`(≤100000,默认200) `fields`(逗号分隔列) `format`(json\|csv) `adj`(qfq\|hfq) `code`(按 code 列精确过滤) |
+| `/api/v1/data/{table_name}` | GET | **通用数据表查询**(数据分发) | `start_date` `end_date`(YYYYMMDD) `limit`(≤100000,默认200) `fields`(逗号分隔列) `format`(json\|csv) `adj`(qfq\|hfq) `code`(按代码列 **code/symbol/ts_code** 任一精确过滤) |
+| `/api/v1/search` | GET | **表内代码搜索**(代码/中文名/拼音) | `q`(空=前 limit 个) `table`(**必填**) `limit`(≤50,默认20);只返回表内实际存在的 code |
 | `/api/v1/stock/daily` | GET | A股日线(按代码) | `symbol`(**必填**) `start_date` `end_date` `limit`(≤50000) |
 | `/api/v1/macro/{table_name}` | GET | 宏观表查询(白名单) | `start_date` `end_date` `limit`(≤10000);表名可省 `macro_` 前缀 |
 | `/api/v1/macro/cpi` | GET | CPI 聚合(多张 CPI 表归并) | `indicator`(名称模糊) `start_date` `end_date` `limit` |
@@ -127,7 +129,8 @@ ETF基金日线   → 表 fund_etf_daily (支持 ?adj=, 2700+ 只)
 6. **`format=csv`**:返回 `text/csv` 文件下载(带 BOM,Excel 直接打开不乱码)。文件名形如 `{table}.csv`/`{key}_snapshot.csv`。
 7. **分页**:`/indicator/{key}` 与 `/boards/{board_key}` 支持 `page`(≥1)。传 `page` 后按 `limit` 做页大小,`meta.pagination = {page, page_size, has_more}`。
 8. **大表查询**:`/data/{table}` 未带日期区间时只返回 `limit` 条并提示。查 300 万行的 `fund_etf_daily` **务必带 `code` 和/或日期区间**,否则截断到任意切片,结论会错。
-9. **新鲜度**:月频指标(CPI/失业率等)FRED 官方约每月中旬才发布上月值,月初显示滞后属正常,勿误判停更。
+9. **`?code=` 与 `?adj=` 的代码列**:`?code=` 按表内代码列过滤——`fund_etf_daily` 是 `code` 列、`index_daily`/`stock_daily` 是 `symbol` 列,均支持。**先用 `/search` 拿 code**(表内实际存在,搜到的必有数据),再带 `?code=` 查询;无代码列的表(宏观表)传 `?code=` → 422。
+10. **新鲜度**:月频指标(CPI/失业率等)FRED 官方约每月中旬才发布上月值,月初显示滞后属正常,勿误判停更。
 
 ## 5. 常见查询模式(完整可复制)
 
@@ -186,6 +189,24 @@ for ep in ("/sources", "/data/tables", "/indicator", "/boards"):
     print(ep, "→", len(r.json()["data"]), "条")
     print(json.dumps(r.json()["data"][:3], ensure_ascii=False, indent=2))
 ```
+
+### ⑤ 代码搜索(行情表找 code,再 ?code= 精确过滤)
+
+```bash
+curl "http://127.0.0.1:8765/api/v1/search?q=创业板&table=fund_etf_daily&limit=20"
+# → {"code":200,"data":[{"code":"159915","name":"创业板ETF易方达","table":"fund_etf_daily"},...],
+#    "meta":{"code_column":"code","matched_by":"name"}}
+```
+
+```python
+import requests
+r = requests.get("http://127.0.0.1:8765/api/v1/search",
+                 params={"q": "5103", "table": "fund_etf_daily", "limit": 20})
+codes = [it["code"] for it in r.json()["data"]]   # ['510300', ...] 只含表内实际 code
+# 拿到 code 后查询: ?code=159915&start_date=...
+```
+
+> 支持代码精确/前缀、中文名、拼音(依赖 pypinyin,未装则跳过)模糊匹配;`q` 留空返回前 `limit` 个 code 供下拉初始化。
 
 ## 6. 边界 / 不做什么
 

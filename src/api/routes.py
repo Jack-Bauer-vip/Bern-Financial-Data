@@ -19,6 +19,13 @@ router = APIRouter()
 # 限制同时进行的同步线程数，防止每次 /sync 请求都无上限创建线程
 _sync_semaphore = threading.BoundedSemaphore(4)
 
+# 行情表 → 资产类型（/search 读取 meta_asset_info 名称用；index 无 adj_factor_asset_type）
+TABLE_ASSET_TYPE = {
+    "fund_etf_daily": "fund",
+    "stock_daily": "stock",
+    "index_daily": "index",
+}
+
 
 # ---------------------------------------------------------------------------
 # 依赖注入：获取数据库引擎（由 server.py 在启动时注入）
@@ -247,7 +254,13 @@ def _filter_by_date_range(df, start_date: str = None, end_date: str = None):
     try:
         if not pd.api.types.is_datetime64_any_dtype(df[date_col]):
             df = df.copy()
-            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+            # 中文「2026年06月份 / 2026年一季度」先归一化为 ISO(2026-06 / 2026-03),
+            # 否则 pd.to_datetime 直接解析中文日期全变 NaT → 兜底过滤把整表误杀
+            from src.utils.date_parse import normalize_cn_date_str
+            df[date_col] = pd.to_datetime(
+                df[date_col].map(lambda v: normalize_cn_date_str(v)
+                                 if isinstance(v, str) else v),
+                errors="coerce")
     except Exception:
         return df
 
@@ -691,6 +704,15 @@ async def query_stock_daily(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_code_column(repo, table_name: str) -> str | None:
+    """解析表的代码列（code/symbol/ts_code 按优先级探测命中表内实际列）。
+
+    委托 repository.detect_code_column（候选列集中定义，防与前端 CODE_KEYWORDS 漂移）。
+    表不存在 → None；调用方据此决定 422 或空结果。
+    """
+    return repo.detect_code_column(table_name)
+
+
 def _valid_table_names(repo) -> list[str]:
     """收集所有可查询的数据表名（排除 meta_ 表）"""
     try:
@@ -717,7 +739,7 @@ async def query_data_table(
     format: str = _format_param(),
     adj: str = Query(None, pattern=r"^(qfq|hfq)$",
                      description="复权：qfq前复权 | hfq后复权（仅股票/ETF行情表）"),
-    code: str = Query(None, description="按代码列 code 精确过滤（仅对含 code 列的表有效）"),
+    code: str = Query(None, description="按代码列精确过滤（code/symbol/ts_code，仅对有代码列的表有效）"),
     repo=Depends(get_repo),
 ):
     """通用数据表查询（数据分发）
@@ -729,7 +751,8 @@ async def query_data_table(
 
     adj=qfq|hfq：对股票/ETF 行情表 OHLC 做前/后复权派生（行情表存不复权
     原始价，复权因子表 asset_adj_factor 派生）。指数/宏观等无因子源表 → 422。
-    code=：单标的精确过滤（如 fund_etf_daily?code=159915），无 code 列的表 → 422。
+    code=：单标的精确过滤（如 fund_etf_daily?code=159915、index_daily?code=sh000001），
+    代码列自动识别 code/symbol/ts_code；无任何代码列的表 → 422。
     """
     # 表名白名单校验（防注入）
     valid = _valid_table_names(repo)
@@ -756,24 +779,27 @@ async def query_data_table(
     # code= 同日期参数：下沉 SQL 且绕过缓存（缓存里是别的 code 的切片）。
     from src.core.ttl_cache import cache
 
+    # 代码列解析：兼容 code/symbol/ts_code（index_daily/stock_daily 用 symbol）。
+    # 表不存在 → 白名单校验已在上方 404，到不了这里；存在但无代码列 → 422。
+    code_col = None
     if code:
-        cols = repo.get_all_existing_columns(table_name)
-        if "code" not in cols:
+        code_col = _resolve_code_column(repo, table_name)
+        if code_col is None:
             raise HTTPException(
                 status_code=422,
-                detail=f"表 {table_name} 无 code 列，不支持按代码过滤",
+                detail=f"表 {table_name} 无代码列(code/symbol/ts_code)，不支持按代码过滤",
             )
 
-    # 缓存键含 adj：复权是派生口径，不同 adj 的缓存结果必须隔离
+    # 缓存键含 adj 与代码列：复权是派生口径、不同代码列口径的缓存结果必须隔离
     use_cache = not (start_date or end_date or code)
-    cache_key = f"data:{table_name}:{limit}:{adj or 'raw'}:{code or ''}"
+    cache_key = f"data:{table_name}:{limit}:{adj or 'raw'}:{code or ''}:{code_col or ''}"
     df = None
     if use_cache:
         df = cache.get(cache_key)
     if df is None:
         try:
             df = repo.query(
-                table_name, filters={"code": code} if code else None, limit=limit,
+                table_name, filters={code_col: code} if code else None, limit=limit,
                 date_from=_ymd_to_iso(start_date),
                 date_to=_ymd_to_iso(end_date),
             )
@@ -847,6 +873,109 @@ async def query_data_table(
         message=message,
         data_status=data_status,
         meta=meta,
+    )
+
+
+@router.get("/search", tags=["数据分发"])
+async def search_codes(
+    q: str = Query("", description="搜索词（代码/中文名/拼音；空=返回前 limit 个代码供下拉初始化）"),
+    table: str = Query(..., description="限定搜索范围的数据表名"),
+    limit: int = Query(20, ge=1, le=50),
+    repo=Depends(get_repo),
+):
+    """按代码/中文名/拼音模糊搜索某表内的代码（供看板代码搜索下拉）
+
+    - **只返回表内实际存在的 code**（搜到的必有数据；meta_asset_info 里不在表的 code 不返回）
+    - 名称来自 meta_asset_info（scripts_gen/sync_asset_names.py 维护）；未同步则名称空、退化为纯 code 匹配
+    - 无代码列的表 → 200 空数组（meta.code_column=null，搜索是只读发现，空态比报错友好）
+    - 匹配分层（稳定排序）：code 精确(0) > code 前缀(1) > 名称前缀(2) > 名称子串(3) > 拼音(4)
+      —— 拼音依赖 pypinyin 可导入，未安装则跳过该层
+    """
+    # 表名白名单校验（防注入，同 /data/{table}）
+    valid = _valid_table_names(repo)
+    if table not in valid:
+        raise HTTPException(
+            status_code=404,
+            detail=f"数据表 {table} 不存在或不可查询，可用表见 /data/tables",
+        )
+
+    code_col = _resolve_code_column(repo, table)
+    if code_col is None:
+        return DataResponse(
+            data=[], total=0, meta={"code_column": None, "matched_by": ""},
+        )
+
+    from src.core.ttl_cache import cache
+
+    # 全量 code 集（缓存；SyncEngine 同步成功会 cache.clear() 全清，无需额外接线）
+    # 注意 get_distinct_values 默认 limit=1000，fund 有 2733 个 code，必须显式传大值
+    cache_key = f"search_codes:{table}"
+    all_codes = cache.get(cache_key)
+    if all_codes is None:
+        all_codes = repo.get_distinct_values(table, code_col, limit=100_000)
+        cache.set(cache_key, all_codes)
+
+    # 名称映射（meta_asset_info 按资产类型读取；表不存在 → {}，优雅降级为纯 code 匹配）
+    names: dict[str, str] = {}
+    asset_type = TABLE_ASSET_TYPE.get(table)
+    if asset_type:
+        names_key = f"asset_names:{asset_type}"
+        names = cache.get(names_key)
+        if names is None:
+            names = repo.get_asset_names(asset_type)
+            cache.set(names_key, names)
+
+    q = (q or "").strip()
+    if not q:
+        # 空搜索词：直接返回前 limit 个 code（下拉初始化候选）
+        picked = all_codes[:limit]
+        return DataResponse(
+            data=[{"code": c, "name": names.get(c, ""), "table": table} for c in picked],
+            total=len(picked),
+            meta={"code_column": code_col, "matched_by": ""},
+        )
+
+    query = q.lower()
+    ranked: list[tuple[int, str]] = []  # (rank, code)
+    for c in all_codes:
+        cl = c.lower()
+        if cl == query:
+            ranked.append((0, c))
+        elif cl.startswith(query):
+            ranked.append((1, c))
+        else:
+            name = names.get(c, "")
+            if name:
+                nl = name.lower()
+                if nl.startswith(query):
+                    ranked.append((2, c))
+                elif query in nl:
+                    ranked.append((3, c))
+
+    # 拼音匹配（可选依赖，未安装自动降级）
+    try:
+        from pypinyin import lazy_pinyin
+        for c, name in names.items():
+            if not name:
+                continue
+            py = "".join(lazy_pinyin(name)).lower()
+            if py.startswith(query) or query in py:
+                if all(r[1] != c for r in ranked):
+                    ranked.append((4, c))
+    except ImportError:
+        pass
+
+    ranked.sort(key=lambda r: (r[0], r[1]))
+    rank_label = {0: "code", 1: "code", 2: "name", 3: "name", 4: "pinyin"}
+    results = [
+        {"code": c, "name": names.get(c, ""), "table": table}
+        for rank, c in ranked[:limit]
+    ]
+    matched_by = rank_label[ranked[0][0]] if ranked else ""
+    return DataResponse(
+        data=results,
+        total=len(results),
+        meta={"code_column": code_col, "matched_by": matched_by},
     )
 
 

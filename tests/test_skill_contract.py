@@ -6,7 +6,8 @@
 - 文档中出现的每个 /api/v1/... 路径(模板如 {table_name} 或示例实例如 fund_etf_daily)
   都必须匹配到 src/api/routes.py 的 api_router 注册路由(路径模式, {param}→[^/]+)
 - scripts_gen/install_skill.py 幂等复制契约到目标目录
-- 契约文档化的 ?code= 过滤参数真实生效(仅含 code 列的表)
+- 契约文档化的 ?code= 过滤真实生效(code/symbol/ts_code 任一代码列均可)
+- 契约文档化的 /search 端点真实生效
 """
 
 import re
@@ -152,11 +153,10 @@ def test_installer_force_overwrites(tmp_path):
 
 @pytest.fixture()
 def code_filter_env(tmp_path):
-    """临时库: fund_etf_daily 两张表、两 code、带 code 列; index_daily 无 code 列"""
+    """临时库: fund_etf_daily(code 列) + index_daily(symbol 列) + macro_us_test(无代码列)"""
     import os
     import tempfile
 
-    import pandas as pd
     from fastapi.testclient import TestClient
     from sqlalchemy import create_engine, text
 
@@ -174,11 +174,21 @@ def code_filter_env(tmp_path):
         c.execute(text(
             'CREATE TABLE index_daily (id INTEGER PRIMARY KEY AUTOINCREMENT, '
             '"date" TEXT, close TEXT, symbol TEXT, created_at TEXT)'))
+        c.execute(text(
+            'CREATE TABLE macro_us_test (id INTEGER PRIMARY KEY AUTOINCREMENT, '
+            '"date" TEXT, value TEXT, created_at TEXT)'))
         for code in ("159915", "510300"):
             for d, close in (("2026-08-01", "10.0"), ("2026-08-02", "10.5")):
                 c.execute(text(
                     'INSERT INTO fund_etf_daily (date, close, code) VALUES (:d, :c, :code)'),
                     {"d": d, "c": close, "code": code})
+        # 指数表: symbol 列(不带交易所后缀, 库内格式), 一条 sh000001
+        c.execute(text(
+            'INSERT INTO index_daily (date, close, symbol) VALUES '
+            '("2026-08-01", "3200.0", "sh000001"), ("2026-08-02", "3210.0", "sh000001")'))
+        c.execute(text(
+            'INSERT INTO macro_us_test (date, value) VALUES '
+            '("2026-08-01", "100.0"), ("2026-08-02", "101.0")'))
     server = FastAPIServer(repo=repo)
     yield TestClient(server.app)
     eng.dispose()
@@ -203,7 +213,29 @@ def test_data_code_filter_limit_takes_latest(code_filter_env):
     assert body["data"][0]["date"] == "2026-08-02"
 
 
+def test_data_code_filter_on_symbol_col(code_filter_env):
+    """?code= 支持 symbol 列(index_daily), 不再 422"""
+    r = code_filter_env.get("/api/v1/data/index_daily?code=sh000001&limit=100")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert {rec["symbol"] for rec in body["data"]} == {"sh000001"}
+
+
 def test_data_code_filter_on_table_without_code_col_422(code_filter_env):
-    r = code_filter_env.get("/api/v1/data/index_daily?code=159915")
+    """无任何代码列(code/symbol/ts_code)的表传 ?code= → 422 且文案含 code"""
+    r = code_filter_env.get("/api/v1/data/macro_us_test?code=159915")
     assert r.status_code == 422
     assert "code" in r.json()["detail"]
+
+
+def test_search_endpoint_returns_code_and_name(code_filter_env):
+    """契约文档化的 /search: 按 code 命中 + meta.code_column 返回"""
+    r = code_filter_env.get("/api/v1/search", params={"q": "1599", "table": "fund_etf_daily"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == 200
+    assert body["meta"]["code_column"] == "code"
+    codes = [it["code"] for it in body["data"]]
+    assert "159915" in codes
+    assert all(it["table"] == "fund_etf_daily" for it in body["data"])

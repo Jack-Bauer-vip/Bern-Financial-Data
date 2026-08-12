@@ -1044,6 +1044,43 @@ class DataRepository:
         except Exception:
             return []
 
+    # 代码列候选（与前端 stats.js CODE_KEYWORDS 对齐，集中一处防漂移）
+    CODE_COLUMN_CANDIDATES = ("code", "symbol", "ts_code")
+
+    def detect_code_column(self, table_name: str) -> str | None:
+        """探测表的代码列名（code/symbol/ts_code 按优先级）；表不存在返回 None
+
+        供 API 侧 ?code= 过滤与 /search 统一解析代码列。表不存在时
+        get_all_existing_columns 的 PRAGMA 返回空列表（不抛异常），仍 try/except 兜底。
+        """
+        if not self.table_exists(table_name):
+            return None
+        try:
+            cols = self.get_all_existing_columns(table_name)
+        except Exception:
+            return None
+        for c in self.CODE_COLUMN_CANDIDATES:
+            if c in cols:
+                return c
+        return None
+
+    def get_asset_names(self, asset_type: str) -> dict[str, str]:
+        """读取 meta_asset_info 的 code→名称 映射（按资产类型）；表不存在返回 {}
+
+        供 /search 名称补全。表由 scripts_gen/sync_asset_names.py 维护，
+        未同步/不存在时优雅降级为纯 code 匹配。
+        """
+        if not self.table_exists("meta_asset_info"):
+            return {}
+        try:
+            with self.engine.connect() as conn:
+                rows = conn.execute(text(
+                    "SELECT code, name FROM meta_asset_info WHERE asset_type = :at"
+                ), {"at": asset_type}).fetchall()
+            return {str(r[0]): (str(r[1]) if r[1] is not None else "") for r in rows}
+        except Exception:
+            return {}
+
     # ------------------------------------------------------------------
     # 复权因子表（asset_adj_factor）只读查询
     # ------------------------------------------------------------------

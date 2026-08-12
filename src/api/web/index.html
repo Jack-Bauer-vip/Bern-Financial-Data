@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bern 数据看板</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header id="toolbar">
+  <div class="brand">
+    <h1>📊 Bern 数据看板</h1>
+    <span class="sub">本地金融数据中台 · 只读查询</span>
+  </div>
+  <div class="controls">
+    <div class="type-tabs" id="type-tabs" role="tablist" title="行情类型预设(通用模式任选表)">
+      <button class="active" data-type="general">通用</button>
+      <button data-type="index">指数</button>
+      <button data-type="etf">ETF</button>
+      <button data-type="stock">股票</button>
+    </div>
+    <select id="table-select" title="数据表"></select>
+    <input type="date" id="start-date" title="开始日期(YYYYMMDD)">
+    <span class="sep">~</span>
+    <input type="date" id="end-date" title="结束日期">
+    <div class="searchbox" id="searchbox" title="按 code 精确过滤">
+      <input type="text" id="code-input" placeholder="代码(如 518880)" autocomplete="off" hidden>
+      <div id="code-dropdown" class="code-dropdown" hidden></div>
+    </div>
+    <select id="adj-select" title="复权(仅行情表)" hidden>
+      <option value="">不复权</option>
+      <option value="qfq">前复权</option>
+      <option value="hfq">后复权</option>
+    </select>
+    <select id="transform-select" title="指标口径(命中指标键时)" hidden>
+      <option value="">level 原值</option>
+      <option value="yoy">同比%</option>
+      <option value="mom">环比%</option>
+      <option value="pct">环比%(pct)</option>
+    </select>
+    <select id="limit-select" title="加载行数">
+      <option value="200">200 行</option>
+      <option value="2000" selected>2000 行</option>
+      <option value="10000">1 万行</option>
+      <option value="50000">5 万行</option>
+    </select>
+    <button id="query-btn" class="primary">查询</button>
+    <button id="copy-link-btn" title="复制当前查询链接">🔗</button>
+  </div>
+</header>
+
+<main>
+  <div id="empty-hint" class="empty-hint" hidden></div>
+
+  <section id="cards" class="cards" hidden></section>
+
+  <section id="chart-section" class="chart-box" hidden>
+    <div class="chart-tools">
+      <button id="chart-mode-line" class="active">折线</button>
+      <button id="chart-mode-k" disabled>K线</button>
+      <label class="cols-picker" id="cols-picker" title="选择画图数值列" hidden>
+        画图列: <select id="col-select" multiple size="1"></select>
+      </label>
+    </div>
+    <div id="chart" class="chart"></div>
+  </section>
+
+  <section id="table-section" hidden>
+    <div class="table-meta">
+      <span id="table-info"></span>
+      <span class="spacer"></span>
+      <label title="显示 id/created_at 等元数据列"><input type="checkbox" id="show-all-cols"> 全部列</label>
+      <button id="export-csv-btn">导出 CSV</button>
+    </div>
+    <div id="table-wrap" class="table-wrap"></div>
+    <div class="table-footer">
+      <span id="page-info"></span>
+      <button id="prev-page">上一页</button>
+      <button id="next-page">下一页</button>
+    </div>
+  </section>
+
+  <div id="loading" class="loading" hidden>加载中…</div>
+</main>
+
+<div id="token-modal" class="modal" hidden>
+  <div class="modal-box">
+    <h3>🔐 需要 API Token</h3>
+    <p class="hint">本地服务已开启鉴权(API_TOKEN),请输入 X-API-Key。</p>
+    <input type="password" id="token-input" placeholder="API token">
+    <div class="modal-actions">
+      <button id="token-ok" class="primary">保存并重试</button>
+      <button id="token-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="./vendor/echarts.min.js"></script>
+<script src="./stats.js"></script>
+<script src="./chart.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

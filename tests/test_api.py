@@ -189,6 +189,29 @@ def test_data_query_date_range(client):
         assert d == "" or "2026-06-01" <= d <= "2026-12-31"
 
 
+def test_data_query_chinese_date_column(client):
+    """回归 2026-08-12: 中文「月份」列(2026年06月份)表带日期过滤不再误杀。
+
+    此前 _filter_by_date_range 用 pd.to_datetime 直接解析中文日期得 NaT,
+    兜底过滤把整表清空(total=0); 修复为先 normalize_cn_date_str 再比较。
+    """
+    plain = client.get("/api/v1/data/macro_china_cpi", params={"limit": 5})
+    if plain.status_code != 200 or plain.json().get("total", 0) == 0:
+        pytest.skip("数据库无 macro_china_cpi 数据")
+    r = client.get(
+        "/api/v1/data/macro_china_cpi",
+        params={"start_date": "19000101", "end_date": "20991231", "limit": 1000},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] > 0, "中文日期列被兜底过滤误杀为 0"
+    # 带日期过滤时「月份」归一化为 ISO(YYYY-MM-DD), 应落在区间内
+    for rec in body["data"]:
+        m = rec.get("月份")
+        if m:
+            assert "1900-01-01" <= str(m)[:10] <= "2099-12-31"
+
+
 def test_data_query_fields(client):
     """字段选择"""
     r = client.get(

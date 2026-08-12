@@ -45,6 +45,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     # 无需鉴权的路径（前缀匹配）
     PUBLIC_PATHS = ("/health", "/docs", "/openapi.json", "/redoc")
+    # 无需鉴权的路径前缀（页面本身 + 静态资源豁免；数据请求仍走 /api/v1 需 token）
+    PUBLIC_PREFIXES = ("/dashboard",)
 
     def __init__(self, app):
         super().__init__(app)
@@ -63,6 +65,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         for p in self.PUBLIC_PATHS:
             if path == p or path == f"/api/v1{p}":
+                return await call_next(request)
+        # 只读网页看板页面与静态资源豁免（数据请求 /api/v1/* 仍校验 token）
+        for prefix in self.PUBLIC_PREFIXES:
+            if path == prefix or path.startswith(prefix + "/"):
                 return await call_next(request)
 
         # 校验 token（常数时间比较，防时序侧信道）
@@ -153,6 +159,18 @@ class FastAPIServer:
 
         self.app.include_router(api_router, prefix="/api/v1")
 
+        # 只读网页看板（理杏仁式：统计卡片 + 走势图 + 历史表），纯静态零构建。
+        # 挂载到 /dashboard 单个挂载点：目录路径回退 index.html，子路径出静态资源。
+        from pathlib import Path
+        from fastapi.staticfiles import StaticFiles
+
+        web_dir = Path(__file__).resolve().parent / "web"
+        self.app.mount(
+            "/dashboard",
+            StaticFiles(directory=web_dir, html=True),
+            name="dashboard",
+        )
+
         # 根路径
         @self.app.get("/")
         async def root():
@@ -174,6 +192,7 @@ class FastAPIServer:
                     "/api/v1/boards/{board_key}",
                     "/api/v1/boards/{board_key}/snapshot",
                     "/api/v1/sync/{source_key}",
+                    "/dashboard",
                 ],
             }
 
