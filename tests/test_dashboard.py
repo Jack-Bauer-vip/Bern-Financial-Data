@@ -32,6 +32,8 @@ def test_dashboard_index_served():
         assert 'data-type="stock"' in r.text
         assert 'id="code-dropdown"' in r.text
         assert 'id="empty-hint"' in r.text
+        # 阶段二(指数分类): chip 行容器
+        assert 'id="cat-chips"' in r.text
 
 
 def test_dashboard_index_with_trailing_slash():

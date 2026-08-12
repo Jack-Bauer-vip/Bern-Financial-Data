@@ -1,0 +1,159 @@
+# 指数分类（理杏仁式）配置
+#
+# 用途：看板指数 tab 分类筛选 chip + API `/api/v1/indices`。
+# 分类逻辑在 src/core/index_categories.py（纯函数，可单测）。
+# 生成脚本：python scripts_gen/sync_index_category.py → 幂等写 meta_index_category。
+#
+# 数据来源三路：
+#   manual —— 手动精修（主流指数，优先于自动分类）
+#   auto   —— 自动分类（宽基全名白名单 + 名称关键词启发式，src/core/index_categories.py）
+#   global —— 跨境/QDII 策划清单（分类与行情数据解耦：即使行情未入库也能先分类）
+#
+# 分类固定顺序 = 看板 chip 顺序。
+
+categories:
+  - 宽基
+  - 行业
+  - 主题
+  - 风格
+  - 策略
+  - 债券
+  - 跨境
+  - 其他
+
+# ---------------------------------------------------------------------------
+# 手动精修（主流指数；code 用库内 index_daily.symbol 格式）
+# ---------------------------------------------------------------------------
+manual:
+  # —— 宽基 ——
+  sh000001: {category: 宽基, sub_category: 大盘}      # 上证指数
+  sh000016: {category: 宽基, sub_category: 大盘}      # 上证50
+  sh000010: {category: 宽基, sub_category: 大盘}      # 上证180
+  sh000009: {category: 宽基, sub_category: 大盘}      # 上证380
+  sh000300: {category: 宽基, sub_category: 大盘}      # 沪深300
+  sh000510: {category: 宽基, sub_category: 大盘}      # 中证A500
+  sh000903: {category: 宽基, sub_category: 大盘}      # 中证100
+  sh000905: {category: 宽基, sub_category: 中盘}      # 中证500
+  sh000906: {category: 宽基, sub_category: 大盘}      # 中证800
+  sh000852: {category: 宽基, sub_category: 小盘}      # 中证1000
+  sh000688: {category: 宽基, sub_category: 大盘}      # 科创50
+  sh000698: {category: 宽基, sub_category: 大盘}      # 科创100
+  sh000680: {category: 宽基, sub_category: 大盘}      # 科创综指
+  sz399001: {category: 宽基, sub_category: 大盘}      # 深证成指
+  sz399006: {category: 宽基, sub_category: 成长}      # 创业板指
+  sz399673: {category: 宽基, sub_category: 成长}      # 创业板50
+  sz399330: {category: 宽基, sub_category: 大盘}      # 深证100
+  sz399005: {category: 宽基, sub_category: 中小盘}    # 中小100
+  sz399303: {category: 宽基, sub_category: 小盘}      # 国证2000
+  sz399850: {category: 宽基, sub_category: 大盘}      # 深证50
+
+  # —— 风格 ——
+  sh000015: {category: 风格, sub_category: 红利}      # 上证红利
+  sh000922: {category: 风格, sub_category: 红利}      # 中证红利
+  sz399324: {category: 风格, sub_category: 红利}      # 深证红利
+  sz399321: {category: 风格, sub_category: 红利}      # 国证红利
+  sh000821: {category: 风格, sub_category: 红利}      # 300红利
+  sh000822: {category: 风格, sub_category: 红利}      # 500红利
+  sz399411: {category: 风格, sub_category: 红利}      # 红利100
+  sz399672: {category: 风格, sub_category: 红利}      # 深红利50
+  sh000918: {category: 风格, sub_category: 成长}      # 300成长
+  sh000919: {category: 风格, sub_category: 价值}      # 300价值
+  sh000028: {category: 风格, sub_category: 成长}      # 180成长
+  sh000029: {category: 风格, sub_category: 价值}      # 180价值
+  sz399372: {category: 风格, sub_category: 大盘成长}  # 大盘成长
+  sz399373: {category: 风格, sub_category: 大盘价值}  # 大盘价值
+  sz399374: {category: 风格, sub_category: 中盘成长}  # 中盘成长
+  sz399375: {category: 风格, sub_category: 中盘价值}  # 中盘价值
+  sz399376: {category: 风格, sub_category: 小盘成长}  # 小盘成长
+  sz399377: {category: 风格, sub_category: 小盘价值}  # 小盘价值
+  sz399404: {category: 风格, sub_category: 低波}      # 大盘低波
+  sz399406: {category: 风格, sub_category: 低波}      # 中盘低波
+  sz399408: {category: 风格, sub_category: 低波}      # 小盘低波
+  sz399296: {category: 风格, sub_category: 成长}      # 创成长
+  sh000690: {category: 风格, sub_category: 成长}      # 科创成长
+  sz399269: {category: 风格, sub_category: 质量}      # 创质量
+
+  # —— 主题 ——
+  sz399997: {category: 主题, sub_category: 白酒}      # 中证白酒指数
+  sz399987: {category: 主题, sub_category: 白酒}      # 中证酒指数
+  sh000941: {category: 主题, sub_category: 新能源}    # 新能源
+  sz399808: {category: 主题, sub_category: 新能源}    # 中证新能源指数
+  sz399976: {category: 主题, sub_category: 新能源汽车} # 中证新能源汽车指数
+  sz399417: {category: 主题, sub_category: 新能源汽车} # 国证新能源汽车指数
+  sh000685: {category: 主题, sub_category: 半导体}    # 科创芯片
+  sz399262: {category: 主题, sub_category: 数字经济}  # 数字经济
+  sz399267: {category: 主题, sub_category: 专精特新}  # 专精特新
+  sz399282: {category: 主题, sub_category: 大数据}    # 大数据50
+  sz399283: {category: 主题, sub_category: 机器人}    # 机器人50
+  sz399284: {category: 主题, sub_category: 人工智能}  # AI 50
+  sz399285: {category: 主题, sub_category: 物联网}    # 物联网50
+  sz399286: {category: 主题, sub_category: 区块链}    # 区块链50
+  sh000158: {category: 主题, sub_category: 环保}      # 上证环保
+  sz399977: {category: 主题, sub_category: 低碳}      # 中证内地低碳经济主题指数
+  sh000160: {category: 主题, sub_category: 一带一路}  # 上证一带一路主题指数
+
+  # —— 策略 ——
+  sz399550: {category: 策略, sub_category: 央视}      # 央视50
+  sh000925: {category: 策略, sub_category: 基本面}    # 基本面50
+  sh000846: {category: 策略, sub_category: ESG}       # ESG100
+  sh000970: {category: 策略, sub_category: ESG}       # ESG40
+  sz399322: {category: 策略, sub_category: 治理}      # 国证治理
+  sh000851: {category: 策略, sub_category: 多因子}    # 中证百度百发策略100指数
+
+  # —— 行业 ——
+  sz399986: {category: 行业, sub_category: 银行}      # 中证银行指数
+  sz399431: {category: 行业, sub_category: 银行}      # 国证银行行业指数
+  sz399975: {category: 行业, sub_category: 证券}      # 中证全指证券公司指数
+  sz399437: {category: 行业, sub_category: 证券}      # 国证证券行业指数
+  sz399967: {category: 行业, sub_category: 国防军工}  # 中证军工
+  sz399973: {category: 行业, sub_category: 国防军工}  # 中证国防指数
+  sz399959: {category: 行业, sub_category: 国防军工}  # 军工指数
+  sz399989: {category: 行业, sub_category: 医药生物}  # 中证医疗指数
+  sz399998: {category: 行业, sub_category: 煤炭}      # 中证煤炭指数
+  sz399432: {category: 行业, sub_category: 汽车}      # 国证汽车与汽车零配件行业指数
+  sz399434: {category: 行业, sub_category: 传媒}      # 国证传媒行业指数
+  sh000819: {category: 行业, sub_category: 有色金属}  # 有色金属
+
+  # —— 债券 ——
+  sh000012: {category: 债券, sub_category: 国债}      # 国债指数
+  sh000923: {category: 债券, sub_category: 公司债}    # 公司债
+  sz399923: {category: 债券, sub_category: 公司债}    # 公司债(深)
+  sh000832: {category: 债券, sub_category: 可转债}    # 中证转债
+  sh000139: {category: 债券, sub_category: 可转债}    # 上证转债
+  sz399307: {category: 债券, sub_category: 可转债}    # 深证转债
+
+  # —— 跨境（境内市场里的特殊宽基/海外，属 732 内部）——
+  sh000054: {category: 跨境, sub_category: 海外}      # 上证海外
+  sh000999: {category: 跨境, sub_category: 两岸三地}  # 中证两岸三地500指数
+
+# ---------------------------------------------------------------------------
+# 跨境/QDII 指数（全手动策划；分类与行情数据解耦）
+#
+# api_function：行情取数函数（akshare）。
+#   stock_hk_index_daily_sina —— 港股日线（新浪，已测可用：HSI/HSCEI/HSTECH…）
+#   index_global_hist_sina     —— 全球日线（新浪，symbol 用其内置代码）
+#   index_global_hist_em       —— 全球日线（东财，需 em 域名可达；当前网络 em 被墙，
+#                                   同步脚本会跳过并提示，em 可达后重跑即可自动补数）
+# 数据源配置：data_catalog.yaml 的 index.hk / index.global 两个源（table=index_daily）。
+# ---------------------------------------------------------------------------
+global:
+  # 港股（stock_hk_index_daily_sina）
+  HSI:    {name: 恒生指数,               category: 跨境, sub_category: 港股, api_function: stock_hk_index_daily_sina}
+  HSCEI:  {name: 恒生中国企业指数,       category: 跨境, sub_category: 港股, api_function: stock_hk_index_daily_sina}
+  HSTECH: {name: 恒生科技指数,           category: 跨境, sub_category: 港股, api_function: stock_hk_index_daily_sina}
+  # 亚太（index_global_hist_sina）
+  NKY:    {name: 日经225指数,            category: 跨境, sub_category: 日本, api_function: index_global_hist_sina}
+  KOSPI:  {name: 首尔综合指数,           category: 跨境, sub_category: 韩国, api_function: index_global_hist_sina}
+  TWJQ:   {name: 台湾加权指数,           category: 跨境, sub_category: 台湾, api_function: index_global_hist_sina}
+  SENSEX: {name: 印度孟买SENSEX指数,     category: 跨境, sub_category: 印度, api_function: index_global_hist_sina}
+  AS51:   {name: 澳大利亚标普200指数,    category: 跨境, sub_category: 澳大利亚, api_function: index_global_hist_sina}
+  # 欧洲（index_global_hist_sina）
+  UKX:    {name: 英国富时100指数,        category: 跨境, sub_category: 英国, api_function: index_global_hist_sina}
+  DAX:    {name: 德国DAX 30种股价指数,   category: 跨境, sub_category: 德国, api_function: index_global_hist_sina}
+  CAC:    {name: 法国CAC40指数,          category: 跨境, sub_category: 法国, api_function: index_global_hist_sina}
+  SX5E:   {name: 欧洲Stoxx50指数,        category: 跨境, sub_category: 欧洲, api_function: index_global_hist_sina}
+  GSPTSE: {name: 加拿大S&P/TSX综合指数,  category: 跨境, sub_category: 加拿大, api_function: index_global_hist_sina}
+  # 美股（东财源，当前网络 em 被墙 → 仅分类，行情待补）
+  SPX:    {name: 标普500指数,            category: 跨境, sub_category: 美股, api_function: index_global_hist_em}
+  NDX:    {name: 纳斯达克100指数,        category: 跨境, sub_category: 美股, api_function: index_global_hist_em}
+  DJI:    {name: 道琼斯工业平均指数,     category: 跨境, sub_category: 美股, api_function: index_global_hist_em}

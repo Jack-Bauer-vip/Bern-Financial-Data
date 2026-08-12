@@ -25,6 +25,7 @@
     page: 1, pageSize: 50, sort: null, sortAsc: false, allCols: false,
     chartMode: 'line', chart: null,
     tables: [], tableNames: {}, deprecated: new Set(), indicatorMap: {},
+    indexCategory: '', indexCatMeta: [],   // 指数 tab 分类筛选(''=全部)
   };
 
   const $ = (id) => document.getElementById(id);
@@ -116,7 +117,15 @@
     state.adj = ''; els.adjSelect.value = '';
     state.transform = ''; els.transformSelect.value = '';
     state.page = 1; state.sort = null;
+    state.indexCategory = '';   // 切类型即重置分类筛选
     els.emptyHint.hidden = true;
+
+    if (type === 'index') {
+      // 指数 tab: 显示分类 chip 行, 拉取分类计数(/indices meta.categories)
+      loadIndexChips();
+    } else {
+      els.catChips.hidden = true;
+    }
 
     if (type === 'general') {
       els.tableSelect.disabled = false;
@@ -401,6 +410,44 @@
     if (dropdownIndex >= 0 && opts[dropdownIndex]) opts[dropdownIndex].scrollIntoView({ block: 'nearest' });
   }
 
+  /* ---------- 指数分类 chip ---------- */
+  async function loadIndexChips() {
+    try {
+      const body = await fetchJSON('/indices', { limit: 500 });
+      state.indexCatMeta = (body.meta && body.meta.categories) || [];
+      renderChips();
+    } catch (e) { els.catChips.hidden = true; }
+  }
+
+  function renderChips() {
+    const total = state.indexCatMeta.reduce((s, c) => s + c.count, 0);
+    const cats = [{ category: '', count: total }, ...state.indexCatMeta];
+    els.catChips.innerHTML = '';
+    cats.forEach((c) => {
+      const b = document.createElement('button');
+      b.className = 'cat-chip' + (state.indexCategory === c.category ? ' active' : '');
+      b.dataset.cat = c.category;
+      b.textContent = (c.category || '全部') + (c.count ? ' ' + c.count : '');
+      b.addEventListener('click', () => selectCategory(c.category));
+      els.catChips.appendChild(b);
+    });
+    els.catChips.hidden = false;
+  }
+
+  async function selectCategory(cat) {
+    state.indexCategory = cat || '';
+    renderChips();
+    if (!state.codeCol) return;
+    els.codeInput.value = '';           // 分类浏览 → 清空旧 code, 下拉展示该类指数
+    const params = { limit: 200 };
+    if (state.indexCategory) params.category = state.indexCategory;
+    try {
+      const body = await fetchJSON('/indices', params);
+      renderDropdown(body.data || []);
+      els.codeInput.focus();            // 保持下拉可见, 可继续 ↑/↓/Enter 选择
+    } catch (e) { /* 静默 */ }
+  }
+
   /* ---------- URL 深链 ---------- */
   function syncUrl() {
     const p = new URLSearchParams();
@@ -411,6 +458,7 @@
     if (state.end) p.set('end', state.end);
     if (state.adj) p.set('adj', state.adj);
     if (state.transform) p.set('transform', state.transform);
+    if (state.indexCategory) p.set('category', state.indexCategory);
     p.set('limit', String(state.limit));
     history.replaceState(null, '', '/dashboard?' + p.toString());
   }
@@ -577,7 +625,7 @@
       tableSection: $('table-section'), tableInfo: $('table-info'), tableWrap: $('table-wrap'),
       pageInfo: $('page-info'), prevPage: $('prev-page'), nextPage: $('next-page'),
       showAllCols: $('show-all-cols'), exportCsvBtn: $('export-csv-btn'),
-      emptyHint: $('empty-hint'),
+      catChips: $('cat-chips'), emptyHint: $('empty-hint'),
       loading: $('loading'), tokenModal: $('token-modal'), tokenInput: $('token-input'),
       tokenOk: $('token-ok'), tokenCancel: $('token-cancel'), toast: $('toast'),
     });
@@ -606,6 +654,10 @@
       if (q.get('adj')) { state.adj = q.get('adj'); els.adjSelect.value = state.adj; }
       if (q.get('transform')) { state.transform = q.get('transform'); els.transformSelect.value = state.transform; }
       if (q.get('limit')) { state.limit = +q.get('limit'); els.limitSelect.value = String(state.limit); }
+      if (wantType === 'index' && q.get('category')) {
+        state.indexCategory = q.get('category');
+        selectCategory(state.indexCategory);   // 恢复分类筛选(下拉展示该类指数)
+      }
       if (state.table && state.tables.includes(state.table)) {
         try { await probeTable(); } catch (e) { toast('加载失败: ' + e.message); }
       }

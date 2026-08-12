@@ -55,6 +55,19 @@ body {
 .type-tabs button.active { background: var(--accent); color: #fff; }
 .type-tabs button.active:hover { color: #fff; }
 
+/* ---------- 指数分类 chip 行 ---------- */
+.cat-chips {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.cat-chips .cat-chip {
+  border: 1px solid var(--border); border-radius: 14px; padding: 2px 12px;
+  background: transparent; font-size: 12px; cursor: pointer; color: var(--text);
+  white-space: nowrap;
+}
+.cat-chips .cat-chip:hover { border-color: var(--accent); color: var(--accent); }
+.cat-chips .cat-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
 /* ---------- 代码搜索下拉 ---------- */
 .searchbox { position: relative; display: inline-flex; }
 #code-input { width: 240px; }

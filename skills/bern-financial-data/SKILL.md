@@ -89,6 +89,7 @@ ETF基金日线   → 表 fund_etf_daily (支持 ?adj=, 2700+ 只)
 |---|---|---|---|
 | `/api/v1/data/{table_name}` | GET | **通用数据表查询**(数据分发) | `start_date` `end_date`(YYYYMMDD) `limit`(≤100000,默认200) `fields`(逗号分隔列) `format`(json\|csv) `adj`(qfq\|hfq) `code`(按代码列 **code/symbol/ts_code** 任一精确过滤) |
 | `/api/v1/search` | GET | **表内代码搜索**(代码/中文名/拼音) | `q`(空=前 limit 个) `table`(**必填**) `limit`(≤50,默认20);只返回表内实际存在的 code |
+| `/api/v1/indices` | GET | **指数分类清单**(理杏仁式:宽基/行业/主题/风格/策略/债券/跨境/其他,含跨境) | `category`(精确分类过滤) `q`(code/名称模糊,字母码大小写不敏感) `limit`(≤1000,默认500);`meta.categories`=`[{category,count}]` 分类计数 |
 | `/api/v1/stock/daily` | GET | A股日线(按代码) | `symbol`(**必填**) `start_date` `end_date` `limit`(≤50000) |
 | `/api/v1/macro/{table_name}` | GET | 宏观表查询(白名单) | `start_date` `end_date` `limit`(≤10000);表名可省 `macro_` 前缀 |
 | `/api/v1/macro/cpi` | GET | CPI 聚合(多张 CPI 表归并) | `indicator`(名称模糊) `start_date` `end_date` `limit` |
@@ -131,6 +132,7 @@ ETF基金日线   → 表 fund_etf_daily (支持 ?adj=, 2700+ 只)
 8. **大表查询**:`/data/{table}` 未带日期区间时只返回 `limit` 条并提示。查 300 万行的 `fund_etf_daily` **务必带 `code` 和/或日期区间**,否则截断到任意切片,结论会错。
 9. **`?code=` 与 `?adj=` 的代码列**:`?code=` 按表内代码列过滤——`fund_etf_daily` 是 `code` 列、`index_daily`/`stock_daily` 是 `symbol` 列,均支持。**先用 `/search` 拿 code**(表内实际存在,搜到的必有数据),再带 `?code=` 查询;无代码列的表(宏观表)传 `?code=` → 422。
 10. **新鲜度**:月频指标(CPI/失业率等)FRED 官方约每月中旬才发布上月值,月初显示滞后属正常,勿误判停更。
+11. **跨境指数**:`index_daily` 混合境内(sh000300 等)与跨境(symbol 为拉丁码:HSI 恒生/NKY 日经/CAC 法国/DAX 德国等)。**全球指数数据自 2022 年起**(新浪接口单次上限 ~1000 行),港股恒生系列自 2013 年;**美股(SPX/NDX/DJI)已分类但行情待东财可达后补**。按分类浏览用 `/indices?category=跨境`,取数仍走 `/data/index_daily?code=HSI`。
 
 ## 5. 常见查询模式(完整可复制)
 
@@ -207,6 +209,22 @@ codes = [it["code"] for it in r.json()["data"]]   # ['510300', ...] 只含表内
 ```
 
 > 支持代码精确/前缀、中文名、拼音(依赖 pypinyin,未装则跳过)模糊匹配;`q` 留空返回前 `limit` 个 code 供下拉初始化。
+
+### ⑥ 指数分类(跨境/宽基等按分类浏览)
+
+```bash
+curl "http://127.0.0.1:8765/api/v1/indices?category=跨境&limit=50"
+# → {"data":[{"code":"HSI","name":"恒生指数","category":"跨境","sub_category":"港股"},...],
+#    "meta":{"categories":[{"category":"宽基","count":74},{"category":"跨境","count":18},...]}}
+```
+
+```python
+import requests
+cats = {c["category"]: c["count"] for c in
+        requests.get("http://127.0.0.1:8765/api/v1/indices").json()["meta"]["categories"]}
+# {'宽基':74,'行业':226,'主题':115,'风格':108,'策略':60,'债券':20,'跨境':18,'其他':127} (748 条)
+# 拿到 code 后按 ?code= 取行情: HSI 恒生 / NKY 日经 / sh000300 沪深300 …
+```
 
 ## 6. 边界 / 不做什么
 

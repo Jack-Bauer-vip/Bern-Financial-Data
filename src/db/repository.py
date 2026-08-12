@@ -1081,6 +1081,50 @@ class DataRepository:
         except Exception:
             return {}
 
+    def get_index_categories(
+        self,
+        category: str | None = None,
+        q: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """读取 meta_index_category 指数分类清单（按分类/关键词过滤）
+
+        供 /indices 端点与看板分类筛选。表不存在（未跑 sync_index_category）→ []。
+        q 对 code/name 模糊匹配（code 走 LOWER 兼容 HSI/NKY 等字母码大小写）。
+        """
+        if not self.table_exists("meta_index_category"):
+            return []
+        try:
+            sql = ("SELECT code, name, category, sub_category, source "
+                   "FROM meta_index_category")
+            where: list[str] = []
+            params: dict = {}
+            if category:
+                where.append("category = :cat")
+                params["cat"] = category
+            if q:
+                where.append("(LOWER(code) LIKE :q OR LOWER(name) LIKE :q)")
+                params["q"] = f"%{str(q).strip().lower()}%"
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            sql += " ORDER BY code"
+            if limit:
+                sql += f" LIMIT {int(limit)}"
+            with self.engine.connect() as conn:
+                rows = conn.execute(text(sql), params).fetchall()
+            return [
+                {
+                    "code": str(r[0]),
+                    "name": str(r[1]) if r[1] else "",
+                    "category": str(r[2]) if r[2] else "",
+                    "sub_category": str(r[3]) if r[3] else "",
+                    "source": str(r[4]) if r[4] else "",
+                }
+                for r in rows
+            ]
+        except Exception:
+            return []
+
     # ------------------------------------------------------------------
     # 复权因子表（asset_adj_factor）只读查询
     # ------------------------------------------------------------------

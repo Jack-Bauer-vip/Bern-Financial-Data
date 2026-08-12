@@ -979,6 +979,50 @@ async def search_codes(
     )
 
 
+@router.get("/indices", tags=["数据分发"])
+async def list_indices(
+    category: str = Query(None, description="分类过滤（宽基/行业/主题/风格/策略/债券/跨境/其他）"),
+    q: str = Query("", description="代码/名称模糊搜索"),
+    limit: int = Query(500, ge=1, le=1000),
+    repo=Depends(get_repo),
+):
+    """指数分类清单（理杏仁式，供看板指数 tab 分类筛选）
+
+    - 返回全部已分类指数：境内 732（宽基/行业/主题/风格/策略/债券/其他）
+      + 跨境策划清单（恒生/日经/标普等，与行情数据解耦——未入库也先分类）
+    - `meta.categories` = [{category, count}]（看板 chip 计数）
+    - 数据由 scripts_gen/sync_index_category.py 维护；旁路脚本不触发 TTL 缓存失效，
+      更新后最长滞后 5 分钟（同 /search 名称）
+    """
+    from src.core.ttl_cache import cache
+
+    cache_key = "index_categories"
+    items = cache.get(cache_key)
+    if items is None:
+        items = repo.get_index_categories()
+        cache.set(cache_key, items)
+
+    # 分类计数（全量口径，供 chip 显示；不受本次过滤影响）
+    counts: dict[str, int] = {}
+    for it in items:
+        counts[it["category"]] = counts.get(it["category"], 0) + 1
+    cats = [{"category": k, "count": v} for k, v in sorted(counts.items())]
+
+    q = (q or "").strip().lower()
+    if category:
+        items = [it for it in items if it["category"] == category]
+    if q:
+        items = [it for it in items
+                 if q in it["code"].lower() or q in it["name"].lower()]
+    items = items[:limit]
+    return DataResponse(
+        data=items,
+        total=len(items),
+        source="index_categories",
+        meta={"categories": cats, "category_filter": category or ""},
+    )
+
+
 # ---------------------------------------------------------------------------
 # 主题看板(定制数据集)— 预定义指标组合, 按主题键一键拉取
 # ---------------------------------------------------------------------------

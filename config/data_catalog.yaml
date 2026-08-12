@@ -794,6 +794,57 @@ categories:
         type: date
         label: 结束日期
         default: today
+  - name: 港股指数日线
+    source_key: index.hk
+    api_source: akshare
+    api_function: stock_hk_index_daily_sina
+    table_name: index_daily
+    has_incremental: true
+    incremental_field: date
+    # 跨境港股指数（恒生/国企/科技）：新浪接口 symbol 即库内 code，写入 index_daily.symbol，
+    # 与 index.daily 共用同表 → ?code=HSI 过滤、去重键 (symbol,date) 均兼容。
+    code_column: symbol
+    params_template:
+      symbol:
+        type: text
+        label: 港股指数代码
+        default: HSI
+      start_date:
+        type: date
+        label: 开始日期
+        default_years: -1
+      end_date:
+        type: date
+        label: 结束日期
+        default: today
+  - name: 全球指数日线
+    source_key: index.global
+    api_source: akshare
+    api_function: index_global_hist_sina
+    table_name: index_daily
+    has_incremental: true
+    incremental_field: date
+    # 全球指数（日经/DAX/CAC/富时/Stoxx等）：新浪接口 symbol 用中文名（如「法国CAC40指数」），
+    # 库内 code 用拉丁码（CAC）→ 双参注入：symbol 给 API、code 写 index_daily.symbol 列。
+    # 美股(SPX/NDX/DJI) 走东财 index_global_hist_em，当前网络 em 被墙 → 同步脚本自动跳过。
+    code_column: symbol
+    params_template:
+      symbol:
+        type: text
+        label: 新浪 symbol(中文名)
+        default: 法国CAC40指数
+      code:
+        type: text
+        label: 库内 code
+        default: CAC
+      start_date:
+        type: date
+        label: 开始日期
+        default_years: -1
+      end_date:
+        type: date
+        label: 结束日期
+        default: today
 - name: 基金数据
   icon: account_balance
   schedule_enabled: false
