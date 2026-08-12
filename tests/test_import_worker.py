@@ -474,6 +474,65 @@ def test_run_ts_code_start_uses_actual_max():
         os.remove(tmp.name)
 
 
+def test_run_new_code_no_data_uses_full_mode_not_table_date():
+    """多代码表：新 code 无数据时必须全量回填，不能用表级 last_sync_date 兜底
+
+    回归：index_daily 已有 sh000001（表级 last_sync_date 被同步抬到今天）时
+    初始化新指数 sh000002 —— 旧逻辑 start_ref 回退表级 last_sync_date，
+    把新 code 误判为「已到最新」直接跳过（或起点取错漏掉历史），
+    730 个新指数一个都拉不进来（2026-08-12 实测：全部 731 个被跳过）。
+    """
+    from datetime import date
+    import tempfile as tf
+    import pandas as pd
+    from sqlalchemy import create_engine, text
+    from src.db.repository import DataRepository
+    from src.core.dynamic_schema import DynamicSchemaManager
+    from src.core.sync_engine import SyncEngine
+    from src.utils.config import ConfigManager
+
+    tmp = tf.NamedTemporaryFile(suffix=".db", delete=False); tmp.close()
+    eng = create_engine(f"sqlite:///{tmp.name}")
+    repo = DataRepository(eng); repo.create_tables()
+    schema = DynamicSchemaManager(repo)
+    with eng.begin() as c:
+        c.execute(text('CREATE TABLE fund_etf_daily (id INTEGER PRIMARY KEY AUTOINCREMENT, '
+                       '"date" TEXT, "code" TEXT, created_at TEXT)'))
+        # 库里已有其他 code 的数据，且表级 last_sync_date 已到「今天」
+        c.execute(text("INSERT INTO fund_etf_daily (date, code) VALUES "
+                       "('2026-08-11','159001')"))
+    repo.update_sync_job('fund_etf_daily', {
+        'display_name': 'ETF基金日线', 'category': '基金', 'api_source': 'tushare',
+        'api_function': 'fund_daily', 'last_sync_date': date.today(),
+        'row_count': 1, 'status': 'completed', 'enabled': True})
+
+    class FakeFetcher:
+        def __init__(self): self.calls = []
+        def fetch(self, source_cfg, params):
+            self.calls.append(dict(params))
+            sd = pd.Timestamp(params['start_date']).date()
+            return pd.DataFrame({'trade_date': [sd.isoformat()], 'open': ['1'],
+                                 'high': ['1'], 'low': ['1'], 'close': ['1'],
+                                 'vol': ['1'], 'amount': ['1']})
+
+    ff = FakeFetcher()
+    eng_sync = SyncEngine(ff, repo, schema, ConfigManager())
+    eng_sync.run('fund.etf_daily', 1, params_override={'ts_code': '159004.SZ'})
+    # 新 code 必须真正发起拉取（旧逻辑表级日期=今天 → 直接跳过, 无 fetch 调用）
+    assert len(ff.calls) == 1, "新 code 无数据时应走全量拉取, 而非被表级日期跳过"
+    # 起点是全量模式（今天-1年）而非表级 last_sync_date+1
+    start = pd.Timestamp(ff.calls[0]['start_date']).date()
+    assert (date.today() - start).days >= 350, \
+        f"应为全量起点(~1年前), got {start} (表级兜底会得到 {date.today()})"
+    # 数据确实写入新 code
+    with eng.connect() as c:
+        rows = c.execute(text("SELECT code FROM fund_etf_daily")).fetchall()
+    assert ('159004',) in rows, rows
+    eng.dispose()
+    if os.path.exists(tmp.name):
+        os.remove(tmp.name)
+
+
 def test_build_sync_jobs_all_codes():
     """「全部」→ 生成对每个已有代码的同步任务（含 ts_code 归一化）"""
     from src.gui.main_window import _build_sync_jobs

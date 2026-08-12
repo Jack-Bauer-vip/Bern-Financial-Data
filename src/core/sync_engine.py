@@ -300,7 +300,11 @@ class SyncEngine(QObject):
             # 增量起点：有 code 时【无条件】用该 code 的实际数据最大日期作起点。
             # 表级 last_sync_date 是全局的（可能被其他 code 的同步更新抬高，如 159001
             # 同步后表级变 7-31，而 159003 只到 6-22），对单个 code 无意义——若用它
-            # 会跳过该 code 该补的区间。表级仅在 code 无数据时兜底。
+            # 会跳过该 code 该补的区间。故有 code 时仅认该 code 的实际数据：
+            #   - 该 code 有数据 → 增量从其实际 max(date) 次日补；
+            #   - 该 code 无数据（如首次初始化新 code）→ 走全量回填，绝不能用表级
+            #     last_sync_date 兜底——否则新 code 会被表级日期误判为「已到最新」
+            #     而跳过（初始化新指数/新基金时数据永远拉不进来）。
             start_ref = last_date
             if code_value and code_col:
                 actual = self.repo.get_max_date(table_name, code_col, code_value)
@@ -309,6 +313,8 @@ class SyncEngine(QObject):
                         start_ref = date.fromisoformat(str(actual))
                     except ValueError:
                         pass
+                else:
+                    start_ref = None
 
             if full_refresh or start_ref is None:
                 # 首次或无历史 -> 回退到固定历史区间
