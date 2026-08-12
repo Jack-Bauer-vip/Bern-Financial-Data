@@ -153,6 +153,7 @@ class SourceFreshness:
     health_check_ignore: bool = False
     running_status: str = "idle"
     last_heartbeat: datetime | None = None
+    last_note: str = ""  # 上次同步结果诊断(静默停更识别), 如「拉取 N 行无新增」
 
 
 def collect_source_freshness(
@@ -248,5 +249,6 @@ def collect_source_freshness(
             health_check_ignore=bool(src.get("health_check_ignore", False)),
             running_status=running_status,
             last_heartbeat=last_heartbeat,
+            last_note=getattr(sync_job, "last_note", "") or "",
         ))
     return out

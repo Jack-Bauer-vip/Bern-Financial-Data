@@ -40,7 +40,7 @@ from src.utils.config import ConfigManager
 
 def _print_table(rows) -> None:
     """打印对齐表格"""
-    headers = ["状态", "数据源", "最新日期", "距今天数", "更新频率"]
+    headers = ["状态", "数据源", "最新日期", "距今天数", "更新频率", "备注"]
     widths = [len(h) for h in headers]
     lines = []
     # 状态符号映射为 ASCII（⚠/✅/🔴 不在 GBK 字符集，老式 Windows 控制台会崩）
@@ -55,12 +55,17 @@ def _print_table(rows) -> None:
 
     for r in rows:
         freq = r.cron if r.cron else "手动"
+        # 备注: 上次同步结果诊断(静默停更识别), 截断避免拉宽表格
+        note = r.last_note if r.last_note else "-"
+        if len(note) > 22:
+            note = note[:21] + "…"
         lines.append([
             _safe(r.status_label),
             _safe(r.name),
             r.last_date.isoformat() if r.last_date else "从未同步",
             f"{r.days_since}天" if r.days_since is not None else "-",
             freq,
+            _safe(note),
         ])
     for line in lines:
         for i, cell in enumerate(line):

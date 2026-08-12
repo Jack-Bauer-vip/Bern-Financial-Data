@@ -64,6 +64,8 @@ class SyncJob(Base):
     # 逐日刷新 last_heartbeat；健康检查据此判断「疑似僵死」。
     running_status: Mapped[str] = mapped_column(String(16), default="idle")
     last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 上次同步结果诊断(静默停更识别): 如「拉取 N 行无新增(疑似停更)」/「新增 N 行」
+    last_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

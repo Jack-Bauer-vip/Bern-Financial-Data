@@ -110,23 +110,28 @@ def test_get_stale_status_monthly_normal():
 
 
 class _FakeSyncJob:
-    def __init__(self, last_sync_date):
+    def __init__(self, last_sync_date, last_note=""):
         self.last_sync_date = last_sync_date
+        self.last_note = last_note
 
 
 class _FakeRepo:
     def get_sync_job(self, module_name):
         jobs = {
             "macro_ok": _FakeSyncJob(date(2026, 8, 4)),
+            "macro_note": _FakeSyncJob(
+                date(2026, 6, 1), "拉取 5 行无新增(疑似重复/源站未更新)"),
         }
         return jobs.get(module_name)
 
     def table_exists(self, table_name):
-        return table_name in ("macro_ok", "macro_dep")
+        return table_name in ("macro_ok", "macro_dep", "macro_note")
 
     def get_last_date(self, table_name, col):
         if table_name == "macro_ok":
             return date(2026, 8, 4)
+        if table_name == "macro_note":
+            return date(2026, 6, 1)
         return None
 
 
@@ -135,6 +140,8 @@ class _FakeRegistry:
         return [
             {"source_key": "macro.ok", "name": "正常源", "table_name": "macro_ok",
              "api_function": "x", "schedule_cron": "0 10 * * *"},
+            {"source_key": "macro.note", "name": "静默源", "table_name": "macro_note",
+             "api_function": "z", "schedule_cron": "0 10 * * *"},
             {"source_key": "macro.dep", "name": "废弃源", "table_name": "macro_dep",
              "api_function": "y", "schedule_cron": "0 22 * * 1-5", "deprecated": True},
         ]
@@ -162,6 +169,16 @@ def test_collect_status_fields():
     assert ok.status_label == "✅ 正常"
     assert ok.status_color.startswith("#")
     assert ok.days_text.endswith("天前")
+
+
+def test_collect_carries_last_note():
+    """静默停更识别：meta_sync_jobs.last_note 原样传入 SourceFreshness.last_note"""
+    rows = collect_source_freshness(_FakeRepo(), _FakeRegistry(), date(2026, 8, 5))
+    noted = next(r for r in rows if r.source_key == "macro.note")
+    assert noted.last_note == "拉取 5 行无新增(疑似重复/源站未更新)"
+    # 无备注的源 → 空字符串
+    ok = next(r for r in rows if r.source_key == "macro.ok")
+    assert ok.last_note == ""
 
 
 # ---------------------------------------------------------------------------

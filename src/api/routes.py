@@ -266,6 +266,29 @@ def _filter_by_date_range(df, start_date: str = None, end_date: str = None):
     return df[mask].copy()
 
 
+def _adj_factor_info(table_name: str) -> tuple | None:
+    """查 catalog 找该表的复权因子归属，返回 (asset_type, factor_table, code_col)；无 → None
+
+    仅带 adj_factor_asset_type 的行情表（股票/ETF）支持复权；指数/宏观/导入表
+    无此字段 → None（调用方对 ?adj= 抛 422）。
+    """
+    try:
+        from src.core.fetcher_registry import FetcherRegistry
+        from src.utils.config import ConfigManager
+        for s in FetcherRegistry(ConfigManager()).get_all_sources():
+            if s.get("table_name") != table_name:
+                continue
+            asset_type = s.get("adj_factor_asset_type")
+            if not asset_type:
+                return None
+            code_col = s.get("code_column") or "code"
+            return (str(asset_type), str(s.get("adj_factor_table", "asset_adj_factor")),
+                    code_col)
+    except Exception:
+        pass
+    return None
+
+
 @router.get("/macro/cpi", tags=["宏观数据"])
 async def query_cpi(
     indicator: str = Query(None, description="指标名称"),
@@ -692,14 +715,21 @@ async def query_data_table(
     limit: int = Query(200, le=100000),
     fields: str = Query(None, description="逗号分隔的字段列表"),
     format: str = _format_param(),
+    adj: str = Query(None, pattern=r"^(qfq|hfq)$",
+                     description="复权：qfq前复权 | hfq后复权（仅股票/ETF行情表）"),
+    code: str = Query(None, description="按代码列 code 精确过滤（仅对含 code 列的表有效）"),
     repo=Depends(get_repo),
 ):
     """通用数据表查询（数据分发）
 
-    按表名查询任意数据表，支持日期区间、字段选择、行数限制。
+    按表名查询任意数据表，支持日期区间、代码过滤、字段选择、行数限制、复权派生。
     表名必须存在于候选集合（防注入）。
     data_status：catalog 源 active/deprecated；非 catalog 导入表 local。
     未传日期区间时默认只返回 limit 条并提示（大表建议带 start_date/end_date）。
+
+    adj=qfq|hfq：对股票/ETF 行情表 OHLC 做前/后复权派生（行情表存不复权
+    原始价，复权因子表 asset_adj_factor 派生）。指数/宏观等无因子源表 → 422。
+    code=：单标的精确过滤（如 fund_etf_daily?code=159915），无 code 列的表 → 422。
     """
     # 表名白名单校验（防注入）
     valid = _valid_table_names(repo)
@@ -723,17 +753,27 @@ async def query_data_table(
 
     # 查询：带日期参数时把区间过滤下沉到 SQL（用日期索引，避免「先 limit 再
     # pandas 过滤」在大表上把目标日期裁掉）；无日期参数走缓存（固定 limit 切片）。
+    # code= 同日期参数：下沉 SQL 且绕过缓存（缓存里是别的 code 的切片）。
     from src.core.ttl_cache import cache
 
-    use_cache = not (start_date or end_date)
-    cache_key = f"data:{table_name}:{limit}"
+    if code:
+        cols = repo.get_all_existing_columns(table_name)
+        if "code" not in cols:
+            raise HTTPException(
+                status_code=422,
+                detail=f"表 {table_name} 无 code 列，不支持按代码过滤",
+            )
+
+    # 缓存键含 adj：复权是派生口径，不同 adj 的缓存结果必须隔离
+    use_cache = not (start_date or end_date or code)
+    cache_key = f"data:{table_name}:{limit}:{adj or 'raw'}:{code or ''}"
     df = None
     if use_cache:
         df = cache.get(cache_key)
     if df is None:
         try:
             df = repo.query(
-                table_name, limit=limit,
+                table_name, filters={"code": code} if code else None, limit=limit,
                 date_from=_ymd_to_iso(start_date),
                 date_to=_ymd_to_iso(end_date),
             )
@@ -742,6 +782,41 @@ async def query_data_table(
         if use_cache and len(df) <= 100_000:
             cache.set(cache_key, df)
 
+    # 日期区间过滤（SQL 已过滤时此步是幂等兜底）——先过滤再派生/字段选择，
+    # 避免 fields 先丢弃日期列导致后续过滤失效
+    df = _filter_by_date_range(df, start_date, end_date)
+
+    # 复权派生：?adj=qfq|hfq 对股票/ETF 行情表 OHLC 应用因子（ODS 原值不动）
+    meta = None
+    if adj and not df.empty:
+        info = _adj_factor_info(table_name)
+        if info is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"表 {table_name} 无复权因子源（指数/宏观等价格指数不支持复权）",
+            )
+        asset_type, factor_table, code_col = info
+        if code_col not in df.columns:
+            raise HTTPException(status_code=422,
+                                detail=f"查询结果缺少代码列 {code_col}，无法复权")
+        codes = [str(c) for c in df[code_col].dropna().unique().tolist() if c]
+        if not codes:
+            raise HTTPException(status_code=422, detail="查询结果无代码值，无法复权")
+        try:
+            from src.core.adj_factor import apply_adjustment
+            factor_df = repo.query_adj_factors(asset_type, codes)
+            if factor_df.empty:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"复权因子未同步（asset_type={asset_type}），请先同步复权因子")
+            df = apply_adjustment(df, adj, factor_df, code_col=code_col)
+            meta = {"adj": adj, "adj_asset_type": asset_type}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"复权派生失败: {type(exc).__name__}") from exc
+
     # 字段选择
     if fields:
         wanted = [f.strip() for f in fields.split(",") if f.strip()]
@@ -749,9 +824,6 @@ async def query_data_table(
         keep = [f for f in wanted if f in existing]
         if keep:
             df = df[keep]
-
-    # 日期区间过滤（SQL 已过滤时此步是幂等兜底）
-    df = _filter_by_date_range(df, start_date, end_date)
 
     # 按日期列倒序（最新在前）
     if not df.empty:
@@ -774,6 +846,7 @@ async def query_data_table(
         total=len(df),
         message=message,
         data_status=data_status,
+        meta=meta,
     )
 
 

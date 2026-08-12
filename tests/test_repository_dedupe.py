@@ -88,3 +88,38 @@ def test_bulk_upsert_no_unique_cols_still_inserts(repo):
                        {"时间": "2026-07-01", "数值": "3.6"}])
     added = repo.bulk_upsert("macro_usa_cpi_yoy", df)
     assert added == 2
+
+
+def test_bulk_upsert_returns_true_new_rows(repo):
+    """返回值为真正新增行数，而非处理行数（静默停更识别依赖）"""
+    # 首次写入 2 行 → 返回 2
+    df1 = pd.DataFrame([{"时间": "2026-06-01", "数值": "3.2"},
+                        {"时间": "2026-07-01", "数值": "3.5"}])
+    assert repo.bulk_upsert(
+        "macro_usa_cpi_yoy", df1, unique_columns=["date"]) == 2
+    # 重同步同日期（含同值 no-op 更新）→ 0 新增，即使行被「处理」
+    df2 = pd.DataFrame([{"时间": "2026-07-01", "数值": "3.5"}])
+    assert repo.bulk_upsert(
+        "macro_usa_cpi_yoy", df2, unique_columns=["date"]) == 0
+    # 更新已存在行（新值）+ 新增一行 → 只计新增 1
+    df3 = pd.DataFrame([{"时间": "2026-07-01", "数值": "3.8"},
+                        {"时间": "2026-08-01", "数值": "3.6"}])
+    assert repo.bulk_upsert(
+        "macro_usa_cpi_yoy", df3, unique_columns=["date"]) == 1
+    # 更新已存在行（新值）+ 新增一行 → 只计新增 1
+    with repo.engine.connect() as c:
+        n = c.execute(text(
+            "SELECT COUNT(*) FROM macro_usa_cpi_yoy")).scalar()
+        v = c.execute(text(
+            "SELECT \"数值\" FROM macro_usa_cpi_yoy WHERE \"时间\"='2026-07-01'")
+        ).scalar()
+    assert n == 3
+    assert v == "3.8"
+
+
+def test_bulk_upsert_batch_internal_dupe_counts_once(repo):
+    """同批内重复唯一键只算一次新增（SQLite 首插后续变冲突更新）"""
+    df = pd.DataFrame([{"时间": "2026-07-01", "数值": "3.5"},
+                       {"时间": "2026-07-01", "数值": "3.6"}])
+    assert repo.bulk_upsert(
+        "macro_usa_cpi_yoy", df, unique_columns=["date"]) == 1

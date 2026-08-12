@@ -145,6 +145,11 @@ AI 兜底(ollama deepseek-r1:14b 或 deepseek API; 返回表名必须在校验�
 - 总表从 116 万行 → **306 万行**,覆盖 2005-01-04 至今。
 - 注意:早期年份含封闭式基金/LOF(tushare `fund_daily` 是全市场口径),非纯 ETF。
 
+**2026-08-11 更新(外部调研执行项落地,详见 `docs/external_research_2026-08-11.md`)**:
+- **行情复权**:`?adj=qfq|hfq` 派生 + 独立因子表 `asset_adj_factor`(ODS 原值不动);股票/ETF 支持,指数/宏观 422。
+- **对外 Claude Code skill 契约**:`skills/bern-financial-data/SKILL.md` —— 静态契约(15 端点全文档化 + curl/requests 可复制示例 + 数据语义防误读)+ **动态发现**(`/sources`、`/data/tables`、`/indicator`、`/boards`、`/health` 活清单)。`scripts_gen/install_skill.py` 装到 `~/.claude/skills/bern-financial-data/`。`tests/test_skill_contract.py` 双向契约一致性(文档化路径 ⊆ api_router 注册路由 ⊆ 文档化),防契约与代码漂移。`/data/{table}` 新增 `?code=` 单标的过滤。
+- **check_freshness 静默停更识别**、**DuckDB ATTACH 演进路径**见 §8-13。
+
 ---
 
 ## 8. 已知问题 / 未决事项(供分析重点)
@@ -166,6 +171,7 @@ AI 兜底(ollama deepseek-r1:14b 或 deepseek API; 返回表名必须在校验�
 10. **早期数据语义**:2005-2017 的 fund_etf_daily 含封闭式基金/LOF,若下游按「ETF」口径使用需过滤,否则会污染统计。
 11. **表结构与类型**:全部 TEXT 存储(数值字符串),查询时靠 pandas 自动转类型;大表 ORDER BY / 日期过滤依赖索引(`ensure_indexes.py` 建普通索引,`/data` 大表按 date+code 复合索引过滤)。SQLite 单写者 + WAL,高并发写受限。
 12. **日期存储改 YYYYMMDD 已评估并拒绝(P3)**:当前定长 ISO TEXT(YYYY-MM-DD)+ 复合索引在 300 万行量级无瓶颈;改存储需迁移 3M 行存量 + 重写整条日期解析/比较链路,属负优化,维持现状。
+13. **存储演进路径(2026-08-11 调研,见 `docs/external_research_2026-08-11.md`)**:当前 SQLite 对日频/月频 + 增量小写入是**正确选择**(单行 INSERT ~1ms、WAL 单写多读;DuckDB 单行插入是反模式 10-50ms)。**当下不迁移**。若将来上分钟级/tick 数据:①DuckDB 可**只读 `ATTACH` SQLite**(`TYPE sqlite, READ_ONLY`)零迁移直接做分析(列式聚合比 SQLite 快 10-100 倍);②规范存储层用 Parquet 分区(hive 分区按日期,分区剪枝 + ZSTD 压缩约 CSV 1/8),旧分区不可变、幂等增量;③增量采集仍留 SQLite(WAL)负责实时写入。分钟级接入路径(tdx2db/mootdx)已记入 CLAUDE.md 待办,暂不做。
 
 ### 已修复、待真机验证
 13. **GUI 表格卡顿修复(7fd6a87)** 与 **同步防卡(28fdd3f)**:代码级已修复并提交,但**用户在真机上拖动/同步验证**尚未确认。

@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
+from src.core.adj_factor import is_tushare_permission_error
 from src.core.data_fetcher import DataFetcher
 from src.core.dynamic_schema import DynamicSchemaManager
 from src.core.exceptions import BernError, DataFetchError
@@ -258,6 +259,12 @@ class SyncEngine(QObject):
             self._log("INFO", f"开始同步 [{source_key}] -> {table_name}")
             self.sync_started.emit(source_key)
 
+            # ★ 批量模式源（复权因子等基础设施源）：委托到按 asset_type 批量同步。
+            #    锁在 finally 释放，run_all/API /sync/{key}/定时 全部安全走批量。
+            if source_cfg.get("sync_mode") == "batch":
+                return self.run_adj_factor_batch(
+                    asset_type=str(source_cfg.get("asset_type", "")))
+
             # 2. 查询上次同步状态
             sync_job = self.repo.get_sync_job(table_name)
             last_date: date | None = sync_job.last_sync_date if sync_job else None
@@ -371,6 +378,13 @@ class SyncEngine(QObject):
             max_date = self._extract_max_date(df)
             row_count = self.repo.count_rows(table_name)
 
+            # 同步结果诊断(静默停更识别): 拉取到行但 0 新增 = 全是重复/源站缓存未更新,
+            # 与「真增量无新数据」区分。健康检查据此判断疑似静默停更。
+            if added > 0:
+                last_note = f"新增 {added} 行"
+            else:
+                last_note = f"拉取 {len(df)} 行无新增(疑似重复/源站未更新)"
+
             self.repo.update_sync_job(table_name, {
                 "display_name": source_cfg.get("name", source_key),
                 "category": source_cfg.get("category", ""),
@@ -381,6 +395,7 @@ class SyncEngine(QObject):
                 "row_count": row_count,
                 "status": "completed",
                 "error_message": None,
+                "last_note": last_note,
                 "enabled": True,
             })
 
@@ -601,6 +616,254 @@ class SyncEngine(QObject):
         keep = ["date", "open", "high", "low", "close", "volume", "amount", "code"]
         keep = [c for c in keep if c in df.columns]
         return df[keep]
+
+    # ------------------------------------------------------------------
+    # 复权因子批量同步（asset_adj_factor）
+    #
+    # 股票/ETF 因子接口（tushare adj_factor / fund_adj）返回同构三列
+    # ts_code/trade_date/adj_factor，按交易日拉全市场一次 —— 与基金批量同构，
+    # 复用 trade_cal + 逐日拉取模式。两 asset_type 写同一 asset_adj_factor 表，
+    # meta_sync_jobs 按 module 名 asset_adj_factor_{asset_type} 分行互不覆盖，
+    # 增量起点用表内该 asset_type 的 MAX(date)（见 repository.get_adj_factor_max_date）。
+    # ------------------------------------------------------------------
+
+    def run_adj_factor_batch(
+        self,
+        asset_type: str,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> int:
+        """按交易日批量同步复权因子（全市场入库），返回写入行数
+
+        增量模式（start_date=None）：起点 = 该 asset_type 因子表最大日期 + 1
+        （首次无数据则回补近 1 年），终点 = 今天。
+        ETF 因子权限不足（is_tushare_permission_error）→ log 提示改用回退命令并中止。
+        """
+        if asset_type not in ("stock", "fund"):
+            raise DataFetchError(f"不支持的 asset_type: {asset_type}")
+        table_name = "asset_adj_factor"
+        module = f"{table_name}_{asset_type}"
+        pro = self.fetcher.tushare_pro
+        if pro is None:
+            raise DataFetchError("tushare 不可用（token 未配置或初始化失败）")
+
+        func_name = "adj_factor" if asset_type == "stock" else "fund_adj"
+
+        # 增量起点：该 asset_type 因子表最大日期 + 1（首跑回补近 1 年）
+        max_date = self.repo.get_adj_factor_max_date(asset_type)
+        if start_date is not None:
+            start = start_date
+            end = end_date or date.today()
+            self._log("INFO", f"[因子批量:{asset_type}] 回溯模式 {start.isoformat()} ~ {end.isoformat()}")
+        else:
+            if max_date is None:
+                start = date.today() - timedelta(days=365)
+                self._log("INFO", f"[因子批量:{asset_type}] 表内无数据，首次回补近 1 年")
+            else:
+                start = max_date + timedelta(days=1)
+                self._log("INFO", f"[因子批量:{asset_type}] 因子已到 {max_date.isoformat()}，增量起点 {start.isoformat()}")
+            end = end_date or date.today()
+            if start > end:
+                self._log("INFO", f"[因子批量:{asset_type}] 因子已到最新，无需批量更新")
+                return 0
+
+        # 交易日历
+        try:
+            cal = pro.trade_cal(
+                exchange="SSE",
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+                is_open="1",
+            )
+            trade_days = sorted(cal["cal_date"].tolist())
+        except Exception as exc:
+            raise DataFetchError(f"获取交易日历失败: {exc}")
+        if not trade_days:
+            self._log("INFO", f"[因子批量:{asset_type}] {start}~{end} 区间无交易日")
+            return 0
+
+        self._log("INFO", f"[因子批量:{asset_type}] 待处理 {len(trade_days)} 个交易日")
+        self.sync_started.emit(f"factor.{asset_type}")
+        try:
+            self.repo.update_sync_heartbeat(module, "running", datetime.now())
+        except Exception:
+            pass
+
+        total = 0
+        failed = 0
+        aborted = False  # 权限不足中止（保留 error 状态，不覆盖为 completed）
+        for d in trade_days:
+            try:
+                raw = pro.adj_factor(trade_date=d) if asset_type == "stock" \
+                    else pro.fund_adj(trade_date=d)
+            except Exception as exc:
+                if is_tushare_permission_error(exc):
+                    self._log(
+                        "WARNING",
+                        f"[因子批量:{asset_type}] tushare 权限不足({exc})，"
+                        f"请改用回退命令: python scripts_gen/sync_adj_factor.py "
+                        f"--asset-type {asset_type} --fallback",
+                    )
+                    self._update_job_error(
+                        module, {}, f"权限不足: {exc}", "tushare", func_name)
+                    self.sync_error.emit(f"factor.{asset_type}", f"权限不足: {exc}")
+                    aborted = True
+                    break
+                failed += 1
+                self._log("WARNING", f"[因子批量:{asset_type}] {d} 拉取失败: {exc}")
+                continue
+            if raw is None or raw.empty:
+                continue
+            df = self._prepare_adj_factor_df(raw, asset_type)
+            if df.empty:
+                continue
+            self.schema_mgr.ensure_columns(table_name, list(df.columns))
+            df = SyncEngine._clean_data(df)
+            added = self.repo.bulk_upsert(
+                table_name, df, unique_columns=["asset_type", "code", "date"],
+                batch_size=self.config.get("sync.batch_size", 500))
+            total += added
+            self._log("INFO", f"[因子批量:{asset_type}] {d}: 全市场 {len(df)} 行，写入 {added} 行")
+            try:
+                self.repo.update_sync_heartbeat(module, "running", datetime.now())
+            except Exception:
+                pass
+            time.sleep(random.uniform(0.3, 0.8))
+
+        if not aborted:
+            # 更新同步任务状态（中止时保留 _update_job_error 写的 error 状态）
+            last_date = self.repo.get_adj_factor_max_date(asset_type)
+            row_count = self.repo.count_rows(table_name)
+            self.repo.update_sync_job(module, {
+                "display_name": f"{'A股' if asset_type == 'stock' else 'ETF'}复权因子",
+                "category": "复权因子",
+                "api_source": "tushare",
+                "api_function": func_name,
+                "last_sync_time": datetime.now(),
+                "last_sync_date": last_date,
+                "row_count": row_count,
+                "status": "completed",
+                "error_message": None,
+                "enabled": True,
+                "running_status": "idle",
+                "last_heartbeat": None,
+            })
+            try:
+                from src.core.ttl_cache import cache
+                cache.clear()
+            except Exception:
+                pass
+
+            self._log(
+                "INFO",
+                f"[因子批量:{asset_type}] 完成，共写入 {total} 行（失败 {failed} 个交易日）",
+            )
+            self.sync_completed.emit(f"factor.{asset_type}", total)
+        return total
+
+    @staticmethod
+    def _prepare_adj_factor_df(df: pd.DataFrame, asset_type: str) -> pd.DataFrame:
+        """tushare 因子返回（ts_code/trade_date/adj_factor）→ 因子表规范列
+
+        ts_code→code（去交易所后缀）、trade_date→date（ISO）、adj_factor→factor；
+        注入 asset_type。factor 为 NaN 的行丢弃。最终列: asset_type/code/date/factor。
+        """
+        if df is None or df.empty:
+            return pd.DataFrame()
+        out = df.rename(columns={
+            "ts_code": "code", "trade_date": "date", "adj_factor": "factor",
+        })
+        out["asset_type"] = asset_type
+        if "code" in out.columns:
+            out["code"] = out["code"].map(lambda c: _strip_exchange(str(c)))
+        if "date" in out.columns:
+            out["date"] = pd.to_datetime(
+                out["date"], format="%Y%m%d", errors="coerce").dt.strftime("%Y-%m-%d")
+        if "factor" in out.columns:
+            out["factor"] = pd.to_numeric(out["factor"], errors="coerce")
+        keep = ["asset_type", "code", "date", "factor"]
+        keep = [c for c in keep if c in out.columns]
+        out = out[keep]
+        if "factor" in out.columns:
+            out = out.dropna(subset=["factor"])
+        return out
+
+    def sync_adj_factor_fallback(
+        self,
+        codes: list[str] | None = None,
+        asset_type: str = "fund",
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> int:
+        """akshare 回退路径：逐 code 反推复权因子（hfq 序列 ÷ 不复权序列）
+
+        仅作降级/补数（tushare fund_adj 权限不足时），全市场逐 code 较慢，CLI 驱动。
+        codes 缺省取 fund_etf_daily 表内全部 code。
+        """
+        table_name = "asset_adj_factor"
+        module = f"{table_name}_{asset_type}"
+        if not codes:
+            codes = self.repo.get_distinct_values("fund_etf_daily", "code", limit=10000)
+        if not codes:
+            self._log("INFO", "[因子回退] 无待同步 code")
+            return 0
+        start = start_date or (date.today() - timedelta(days=365 * 2))
+        end = end_date or date.today()
+        s, e = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+
+        total = 0
+        failed = 0
+        for code in codes:
+            try:
+                hfq = self.fetcher._call_ak(
+                    "fund_etf_hist_em",
+                    {"symbol": code, "period": "daily",
+                     "start_date": s, "end_date": e, "adjust": "hfq"})
+                raw = self.fetcher._call_ak(
+                    "fund_etf_hist_em",
+                    {"symbol": code, "period": "daily",
+                     "start_date": s, "end_date": e, "adjust": ""})
+                if hfq.empty or raw.empty:
+                    continue
+                from src.core.adj_factor import derive_factor_from_prices
+                factor = derive_factor_from_prices(hfq, raw)
+                if factor.empty:
+                    continue
+                factor["code"] = _strip_exchange(code)
+                factor["asset_type"] = asset_type
+                factor = factor[["asset_type", "code", "date", "factor"]]
+                self.schema_mgr.ensure_columns(table_name, list(factor.columns))
+                factor = SyncEngine._clean_data(factor)
+                added = self.repo.bulk_upsert(
+                    table_name, factor, unique_columns=["asset_type", "code", "date"],
+                    batch_size=self.config.get("sync.batch_size", 500))
+                total += added
+            except Exception as exc:
+                failed += 1
+                self._log("WARNING", f"[因子回退] {code} 失败: {exc}")
+            time.sleep(random.uniform(0.5, 1.5))
+
+        try:
+            self.repo.update_sync_job(module, {
+                "display_name": "ETF复权因子(akshare回退)",
+                "category": "复权因子",
+                "api_source": "akshare",
+                "api_function": "fund_etf_hist_em",
+                "last_sync_time": datetime.now(),
+                "last_sync_date": self.repo.get_adj_factor_max_date(asset_type),
+                "row_count": self.repo.count_rows(table_name),
+                "status": "completed",
+                "error_message": None,
+                "enabled": True,
+            })
+            from src.core.ttl_cache import cache
+            cache.clear()
+        except Exception:
+            pass
+
+        self._log("INFO", f"[因子回退] 完成，共写入 {total} 行（失败 {failed} 个 code）")
+        self.sync_completed.emit(f"factor.{asset_type}", total)
+        return total
 
     # ------------------------------------------------------------------
     # 批量同步

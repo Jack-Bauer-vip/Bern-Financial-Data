@@ -182,6 +182,26 @@ class SyncFundBatchWorker(QObject):
             self.finished.emit()
 
 
+class SyncAdjFactorWorker(QObject):
+    """复权因子批量同步工作器 — 按交易日拉全市场因子（asset_type 分流）"""
+
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, sync_engine: SyncEngine, asset_type: str):
+        super().__init__()
+        self.sync_engine = sync_engine
+        self.asset_type = asset_type
+
+    def run(self) -> None:
+        try:
+            self.sync_engine.run_adj_factor_batch(self.asset_type)
+        except Exception as exc:
+            self.error.emit(str(exc))
+        finally:
+            self.finished.emit()
+
+
 class QueryWorker(QObject):
     """后台查询工作器 — 只查数据库"""
 
@@ -1368,6 +1388,13 @@ class MainWindow(QMainWindow):
             self._run_fund_daily_batch()
             return
 
+        # ★ 批量模式源（复权因子等基础设施源）→ 按 asset_type 走批量
+        if len(source_keys) == 1:
+            batch_src = self.registry.get_source(source_keys[0])
+            if batch_src and batch_src.get("sync_mode") == "batch":
+                self._run_adj_factor_batch(str(batch_src.get("asset_type", "")))
+                return
+
         # 2. 可读名称清单（列表过长时截断显示）
         names = []
         for k in source_keys:
@@ -1496,6 +1523,39 @@ class MainWindow(QMainWindow):
         worker.finished.connect(self._on_sync_all_finished)
         worker.error.connect(
             lambda err: self.log_widget.write("ERROR", f"批量更新失败: {err}"))
+        thread.finished.connect(thread.deleteLater)
+
+        thread.started.connect(worker.run)
+        thread.start()
+        self._threads.append(thread)
+        thread.finished.connect(lambda: self._cleanup_thread(thread))
+
+    def _run_adj_factor_batch(self, asset_type: str) -> None:
+        """批量同步复权因子（按交易日拉全市场因子入库 asset_adj_factor）"""
+        label = "A股" if asset_type == "stock" else "ETF"
+        ret = QMessageBox.question(
+            self,
+            f"同步{label}复权因子",
+            f"将按交易日批量拉取{label}复权因子（全市场入库，每次交易日一次调用）。\n\n"
+            "因子用于 /data?adj=qfq|hfq 复权价派生，行情表原始价保持不变。\n\n是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            self.log_widget.write("INFO", f"已取消{label}复权因子同步")
+            return
+
+        self.log_widget.write("INFO", f"开始同步{label}复权因子（按交易日批量）...")
+        thread = QThread(self)
+        worker = SyncAdjFactorWorker(self.sync_engine, asset_type)
+        thread._worker_ref = worker
+        worker.moveToThread(thread)
+
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._on_sync_all_finished)
+        worker.error.connect(
+            lambda err: self.log_widget.write("ERROR", f"复权因子同步失败: {err}"))
         thread.finished.connect(thread.deleteLater)
 
         thread.started.connect(worker.run)

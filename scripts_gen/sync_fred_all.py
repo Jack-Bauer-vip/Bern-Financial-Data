@@ -16,6 +16,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Windows GBK 控制台兜底：避免 ✓/✗/← 等符号 UnicodeEncodeError 崩溃。
+# 仅改 errors（保留原 encoding，中文在 GBK 下仍正常显示），无法编码的字符替换为 '?'。
+for _stream in (sys.stdout, sys.stderr):
+    if _stream and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
 import sqlalchemy as sa
 
 from src.core.data_fetcher import DataFetcher

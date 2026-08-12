@@ -16,22 +16,27 @@
 7. ⏰ **FRED 7 月月频补数(约 8 月中旬)**:CPI/失业率/非农/PPI 等月频仍停 06-01,FRED 官方约 8 月中旬发布 7 月值,届时跑一次增量同步自动补(真增量只拉缺失区间)
 8. ~~**主题看板(定制数据集)+ 对外接口增强**~~ **已落地(2026-08-07)**:`config/themes.yaml` 定义主题(指标+口径+日期窗口/始终最新),GUI「数据→📋 主题看板」建主题看每日快照(最新值/环比/同比/近3期,可下钻/导出/同步本主题);API 新增 `/api/v1/boards`(列表/快照/时序宽表),所有 `/indicator`、`/data`、`/boards` 端点支持 `?format=csv`,可选 `?page=` 分页(meta.pagination);OpenAPI 版本升至 0.2.0、/docs 按 8 个 tag 分组。核心在 `src/core/boards.py`(BoardStore 读写校验 + BoardService 快照/宽表,复用 `repo.get_indicator`+`compute_transform`)。**v2 扩展(同日)**:主题条目支持两类——①宏观指标(老配置无 type 兼容);②**代码类条目** `type: code`(基金/股票/指数日线: `table`+`code_column`+`code`+`value_column`,快照=该代码最新一条值列+日期,环比/同比留空,series 仍可 `?transform=`)。条目经**数据分类树选择器**添加(`src/gui/dialogs/board_item_picker_dialog.py`,可搜索/折叠,deprecated 灰禁; `board_manager_dialog.py` 行改为摘要+「…」重选)。类型判定/代码列解析统一走 `boards.py` 模块级 `_item_type`/`classify_source`/`resolve_code_column`/`collect_code_sources`/`code_value_columns`(目录 code_column 优先,否则探测表内 code/symbol 列;读侧不剥前缀),校验 `validate_board` 按类型分流。测试 +15(`tests/test_boards.py` 34 个,含 code fixture/校验/快照/时序/API/混合主题)
 9. 🛠 **打包/分发到其他电脑(待决策,2026-08-07 评估)**:可行,项目对打包友好(GUI 零资源文件/data 自动创建/ollama 缺失优雅降级)。候选路线:PyInstaller `--onedir` 免安装(~800MB,需改造)或绿色 venv 便携包。**前置改造 3 处**:①`logger.py:54` `Path.cwd()` 改数据目录;②路径基于 `__file__` 的 root_dir 与打包只读资源分离(需加 frozen/_MEIPASS 检测);③`start_bern.bat` 硬编码路径改相对。**安全注意**:`.env` 含明文 FRED_API_KEY 且被 git 跟踪(与 .gitignore 声明不符),分发前处理。详见计划备忘录 `humble-greeting-stallman.md` 与记忆文件
+10. 📊 **外部项目调研(2026-08-11,见 `docs/external_research_2026-08-11.md`)**:评估结论——本系统架构当前阶段正确,无需推倒重来。4 项执行项**全部落地(2026-08-11)**:①**行情复权** → `?adj=qfq|hfq` 派生 + 因子表批量同步(`src/core/adj_factor.py`、`scripts_gen/sync_adj_factor.py`、`asset_adj_factor` 表);②**Claude Code skill + 对外 SKILL.md 契约** → `skills/bern-financial-data/SKILL.md`(静态契约 + 动态发现:15 端点全文档化、可复制 curl/requests 示例、数据语义防误读),`scripts_gen/install_skill.py` 装到 `~/.claude/skills/bern-financial-data/` 供任意项目激活,`tests/test_skill_contract.py` 双向契约一致性(文档化路径 ⊆ api_router 注册路由 ⊆ 文档化);③**check_freshness 静默停更** → `meta_sync_jobs.last_note` + CLI 备注列;④**DuckDB ATTACH 演进路径** → 记入 `docs/project_overview.md` §8-13。**排除**:free-stockdb C++ 引擎/商业 MCP/OpenBB/DAG 编排。
+11. ⏸ **分钟级数据接入(tdx2db/mootdx,2026-08-11 记入待办,暂时不做)**:若将来需要分钟级行情,tushare 数据路径(按交易日批量)或 tdx2db(通达信本地数据入库,增量幂等+AGENTS.md)/mootdx(TCP 直连)是成熟方案。**注意**:通达信本地数据有版权/合规与停更风险。执行前置:存储层先按待办 #5(P2)演进到 DuckDB/Parquet(分钟级数据量 SQLite 分析性能不足)。
 
 ## 快速命令
 
 ```bash
 pip install -e .[dev]        # 安装(dev 含 pytest)
 python src/main.py           # 启动桌面端(start_bern.bat 等效)
-python -m pytest tests/ -q   # 跑测试(当前 257 个全绿)
+python -m pytest tests/ -q   # 跑测试(当前 315 个全绿)
 python scripts_gen/gen_report.py --date 2026-08-04   # 日报 PDF
 python scripts_gen/vacuum_and_archive.py             # DB 瘦身(默认 500MB 阈值,超才 VACUUM)
 python scripts_gen/check_freshness.py --only-stale   # 数据新鲜度(退出码 1=有停更)
 python scripts_gen/ensure_indexes.py                 # 为 catalog 表建普通索引(幂等)
 python scripts_gen/migrate_index_daily.py            # 一次性修复 index_daily(2014→今)
 python scripts_gen/sync_fund_batch.py                # 基金日线批量同步(按交易日补全市场)
+python scripts_gen/sync_adj_factor.py --asset-type stock   # 复权因子批量同步(因子表入库)
+python scripts_gen/sync_adj_factor.py --asset-type fund --fallback   # ETF因子 akshare 回退
+python scripts_gen/install_skill.py                        # 对外 SKILL.md 契约装到 ~/.claude/skills
 ```
 
-- 本地 API:`http://127.0.0.1:8765`,Swagger 在 `/docs`(版本 0.2.0)。鉴权用 `X-API-Key` 头(非 URL token),`.env` 配 `API_TOKEN`,留空则不鉴权。数据端点 `/indicator/{key}`、`/data/{table}`、`/boards/*` 支持 `?format=json|csv`(csv 走 `text/csv` 下载);`/indicator`、`/boards/*` 支持可选 `?page=&page_size=`(meta.pagination);主题看板见 `GET /api/v1/boards`、`GET /api/v1/boards/{key}`(时序宽表)、`GET /api/v1/boards/{key}/snapshot`(快照)。
+- 本地 API:`http://127.0.0.1:8765`,Swagger 在 `/docs`(版本 0.2.0)。鉴权用 `X-API-Key` 头(非 URL token),`.env` 配 `API_TOKEN`,留空则不鉴权。数据端点 `/indicator/{key}`、`/data/{table}`、`/boards/*` 支持 `?format=json|csv`(csv 走 `text/csv` 下载);`/indicator`、`/boards/*` 支持可选 `?page=&page_size=`(meta.pagination);`/data/{table}` 支持可选 `?adj=qfq|hfq` 复权派生(仅股票/ETF 行情表,指数/宏观 422;行情表存不复权原值,因子表 `asset_adj_factor` 派生)与可选 `?code=` 按 code 列精确过滤(无 code 列的表 422,带 code 绕过缓存下沉 SQL);主题看板见 `GET /api/v1/boards`、`GET /api/v1/boards/{key}`(时序宽表)、`GET /api/v1/boards/{key}/snapshot`(快照)。**对外 AI 契约**:`skills/bern-financial-data/SKILL.md`(装到 `~/.claude/skills/` 供任意 Claude Code 项目查询数据)。
 - 数据源配置在 `config/data_catalog.yaml`(不是写死代码)。改数据源/新增数据源**改 YAML**,树形 GUI 在「分类管理」对话框。
 
 ## 架构总览(数据流水线)
@@ -83,7 +88,7 @@ SyncEngine.run(source_key)                               │  同步/导入/抓�
 | 模块 | 职责 | 关键点 |
 |---|---|---|
 | `src/api/` | FastAPI 本地服务 | `server.py` 中间件顺序:连接追踪→鉴权→CORS;`routes.py` 表名白名单防注入、`_df_to_json_records` 清洗 NaN/NaT/Timestamp(防 pydantic 序列化 bug) |
-| `src/core/` | 同步引擎、取数、FRED、调度、动态 schema | `sync_engine.py` 最核心;`transform.py` 指标派生;`boards.py` 主题看板(BoardStore 配置读写校验 + BoardService 快照/宽表,复用 `get_indicator`+`compute_transform`);`ttl_cache.py` 内存缓存;`freshness.py` 新鲜度纯函数 |
+| `src/core/` | 同步引擎、取数、FRED、调度、动态 schema | `sync_engine.py` 最核心;`transform.py` 指标派生;`adj_factor.py` 行情复权纯函数(apply_adjustment qfq/hfq + derive_factor_from_prices 回退反推);`boards.py` 主题看板(BoardStore 配置读写校验 + BoardService 快照/宽表,复用 `get_indicator`+`compute_transform`);`ttl_cache.py` 内存缓存;`freshness.py` 新鲜度纯函数 |
 | `src/db/` | SQLAlchemy 引擎/元数据表/通用访问层 | `repository.py` bulk_upsert(`_sanitize_for_sql` 防 NaT/nan/NA 崩库)、去重、唯一/普通索引 |
 | `src/export/` | CSV/Excel/PDF 导出 | — |
 | `src/gui/` | PySide6 桌面界面 | `main_window.py` 1781 行(最大),`dialogs/` 各对话框;健康检查复用 `freshness.collect_source_freshness` |
@@ -141,5 +146,5 @@ AI 兜底(ollama deepseek-r1:14b 或 deepseek API; 返回表名必须在校验�
 
 ## 测试
 
-- 257 个测试全绿(~18s):`tests/` 覆盖 matcher、column_mapper、api、sync_engine、fred_client、importer、scraper、indicator、catalog_editor、header_template、boards(主题配置读写/校验/快照/宽表/API 端点)等。
+- 315 个测试全绿(~33s):`tests/` 覆盖 matcher、column_mapper、api、sync_engine、fred_client、importer、scraper、indicator、catalog_editor、header_template、boards(主题配置读写/校验/快照/宽表/API 端点)、adj_factor(复权纯函数/批量同步/API)、skill_contract(对外 SKILL.md 契约一致性 + ?code= 过滤行为)等。
 - 测试用临时 SQLite(engine 层),不污染 `data/berndata.db`。

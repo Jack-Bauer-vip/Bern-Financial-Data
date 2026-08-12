@@ -725,6 +725,9 @@ categories:
     api_source: akshare
     api_function: stock_zh_a_hist
     table_name: stock_daily
+    # 复权因子归属：查询端 /data/stock_daily?adj=qfq|hfq 走此因子表派生
+    adj_factor_asset_type: stock
+    adj_factor_table: asset_adj_factor
     has_incremental: true
     incremental_field: date
     # 统一中文列 → 规范英文列（与 CSV 导入的表头一致），并注入 symbol 列
@@ -800,6 +803,9 @@ categories:
     api_source: tushare
     api_function: fund_daily
     table_name: fund_etf_daily
+    # 复权因子归属：查询端 /data/fund_etf_daily?adj=qfq|hfq 走此因子表派生
+    adj_factor_asset_type: fund
+    adj_factor_table: asset_adj_factor
     # 数据使用警告：GUI 加载该表时顶部黄色警告条展示（见 docs/DATA_GOVERNANCE.md §5）
     data_warning: "2005-2017 含封闭式基金/LOF，按 ETF 口径统计时需过滤"
     has_incremental: true
@@ -832,3 +838,34 @@ categories:
         type: date
         label: 结束日期
         default: today
+- name: 复权因子
+  icon: swap_horiz
+  schedule_enabled: false
+  children:
+  - name: A股复权因子
+    source_key: factor.stock
+    api_source: tushare
+    api_function: adj_factor
+    table_name: asset_adj_factor
+    asset_type: stock
+    sync_mode: batch
+    has_incremental: true
+    incremental_field: date
+    date_format: '%Y%m%d'
+    code_column: code
+    health_check_ignore: true   # 因子新鲜度不单独告警（随行情主表反映）
+  - name: ETF复权因子
+    source_key: factor.fund
+    api_source: tushare
+    api_function: fund_adj
+    table_name: asset_adj_factor
+    asset_type: fund
+    sync_mode: batch
+    # tushare fund_adj 权限不足时回退 akshare fund_etf_hist_em 反推因子
+    fallback_api_source: akshare
+    fallback_api_function: fund_etf_hist_em
+    has_incremental: true
+    incremental_field: date
+    date_format: '%Y%m%d'
+    code_column: code
+    health_check_ignore: true

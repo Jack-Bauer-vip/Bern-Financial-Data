@@ -95,8 +95,15 @@ def resolve_code_column(source: dict, repo) -> str | None:
     return None
 
 
+def _is_infra_source(source: dict) -> bool:
+    """基础设施/派生源（sync_mode=batch，如复权因子）不可入主题看板"""
+    return bool(source.get("sync_mode") == "batch")
+
+
 def classify_source(source: dict, repo) -> str | None:
     """叶节点数据源分类: 'indicator' | 'code' | None(不可选/deprecated)"""
+    if _is_infra_source(source):
+        return None
     if source.get("deprecated"):
         return None
     if source.get("indicator"):
@@ -116,6 +123,8 @@ def collect_code_sources(registry, repo=None,
     """
     out: dict[str, dict] = {}
     for s in registry.get_all_sources(include_deprecated=True):
+        if _is_infra_source(s):
+            continue  # 派生/基础设施源（复权因子等）不暴露为代码类数据源
         if s.get("indicator"):
             continue
         if not s.get("table_name") or not s.get("api_function"):

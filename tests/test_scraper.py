@@ -67,9 +67,9 @@ def test_scrape_save_dedup(repo):
     df = engine.parse_html(HTML_SAMPLE, RULE)
     added = engine.save(RULE, df)
     assert added == 3
-    # 重复保存 → 更新不新增
+    # 重复保存 → 更新不新增（返回值是真新增行数，2026-08-12 修正语义）
     added2 = engine.save(RULE, df)
-    assert added2 == 3
+    assert added2 == 0
     with repo.engine.connect() as c:
         n = c.execute(text("SELECT COUNT(*) FROM scrape_rates")).scalar()
     assert n == 3  # 去重后仍 3 行

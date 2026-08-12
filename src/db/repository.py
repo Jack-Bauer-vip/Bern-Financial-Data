@@ -753,7 +753,8 @@ class DataRepository:
         if unique_cols:
             self.ensure_unique_index(table_name, unique_cols, dedupe=True)
 
-        total = 0
+        total = 0        # 处理行数（日志口径，含已存在的更新）
+        new_rows = 0     # 真正新增行数（返回值；静默停更识别等依赖准确口径）
         metadata = MetaData()
         records = df.to_dict(orient="records")
 
@@ -769,6 +770,12 @@ class DataRepository:
                 batch = records[i : i + batch_size]
                 stmt = sqlite_insert(table).values(batch)
                 if unique_cols:
+                    # 预查批内唯一键哪些已存在 → 统计真正新增行数。
+                    # ON CONFLICT DO UPDATE 的 rowcount 连「同值 no-op 更新」也计 1
+                    #（sqlite changes() 语义），无法区分新增/更新，故必须显式预查。
+                    # 这是静默停更识别的数据基础：拉回 N 行但 0 新增 = 全是重复/源站未更新。
+                    new_rows += self._count_new_unique_keys(
+                        conn, table_name, unique_cols, batch)
                     # 唯一键之外的列在冲突时更新（保留原 id / created_at）
                     set_cols = {
                         c: getattr(stmt.excluded, c)
@@ -782,6 +789,8 @@ class DataRepository:
                         stmt = stmt.on_conflict_do_nothing(
                             index_elements=unique_cols)
                 else:
+                    # 无唯一键：OR REPLACE 全量按新增计
+                    new_rows += len(batch)
                     stmt = stmt.prefix_with("OR REPLACE")
                 conn.execute(stmt)
                 total += len(batch)
@@ -790,7 +799,56 @@ class DataRepository:
 
         logger.info("bulk_upsert %s: %d 行已处理（唯一键=%s）",
                     table_name, total, unique_cols)
-        return total
+        return new_rows
+
+    @staticmethod
+    def _count_new_unique_keys(
+        conn,
+        table_name: str,
+        unique_cols: list[str],
+        records: list[dict],
+    ) -> int:
+        """批内唯一键已存在于表中的行数 → 返回真正新增行数（批内去重）
+
+        静默停更识别的数据基础：拉回 N 行但 0 新增 = 全是重复/源站未更新。
+        手工拼行值 IN（SQLite 支持 `(c1,c2) IN ((v1,v2),...)`，但 SQLAlchemy
+        元组表达式在老 SQLite 方言下编译失败）；列名走 _quote_column 防注入。
+        键值统一转 str：表内 TEXT 亲和会把数字绑参归一，Python 侧也按 str 比较。
+        按 ~250 键/次分块，避开 SQLite 绑定参数上限（旧版 999）。
+        """
+        if not records or not unique_cols:
+            return 0
+        # 批内去重（同批重复的唯一键只算一次新增）。
+        # 唯一键含 NULL 的行：SQLite 唯一索引对 NULL 互不冲突，ON CONFLICT 永不
+        # 匹配 → 每次写入都是真新增（NaT 日期行同理），单独计数不参与预查。
+        unique_keys: set[tuple] = set()
+        null_key_rows = 0
+        for r in records:
+            if all(r.get(c) is not None for c in unique_cols):
+                unique_keys.add(tuple(str(r.get(c)) for c in unique_cols))
+            else:
+                null_key_rows += 1
+        if not unique_keys:
+            return null_key_rows
+
+        cols_sql = ", ".join(DataRepository._quote_column(c) for c in unique_cols)
+        tbl = DataRepository._quote_table(table_name)
+        existing: set[tuple] = set()
+        keys_list = list(unique_keys)
+        for start in range(0, len(keys_list), 250):
+            chunk = keys_list[start:start + 250]
+            placeholders = []
+            params: dict[str, object] = {}
+            for idx, k in enumerate(chunk):
+                placeholders.append(
+                    "(" + ",".join(f":_k{start + idx}_{j}" for j in range(len(k))) + ")")
+                for j, v in enumerate(k):
+                    params[f"_k{start + idx}_{j}"] = v
+            sql = (f"SELECT {cols_sql} FROM {tbl} "
+                   f"WHERE ({cols_sql}) IN ({', '.join(placeholders)})")
+            rows = conn.execute(text(sql), params).fetchall()
+            existing.update(tuple(r) for r in rows)
+        return null_key_rows + sum(1 for k in unique_keys if k not in existing)
 
     def analyze_import(
         self,
@@ -932,14 +990,18 @@ class DataRepository:
         date_expr = None
         if date_from is not None or date_to is not None:
             date_filtered = True
+        # 探测日期列：范围过滤（日期区间或 filters，如 code=）都可能在带 LIMIT
+        # 时需要按日期倒序取最新，统一在此探测 date_expr。
+        if (date_filtered or filters) and date_col is None:
             date_col = self._find_date_column(table_name)
-            if date_col:
-                safe_dc = date_col.replace("\"", "\"\"")
+        if date_col:
+            safe_dc = date_col.replace("\"", "\"\"")
+            cn_col = any(k in date_col for k in ("月份", "季度"))
+            date_expr = (f'normalize_cn_date_str("{safe_dc}")'
+                         if cn_col else f'"{safe_dc}"')
+            if date_filtered:
                 iso_from = self._to_iso_date(date_from)
                 iso_to = self._to_iso_date(date_to)
-                cn_col = any(k in date_col for k in ("月份", "季度"))
-                date_expr = (f'normalize_cn_date_str("{safe_dc}")'
-                             if cn_col else f'"{safe_dc}"')
                 if iso_from is not None:
                     where_clauses.append(f"{date_expr} >= :_d_from")
                     params["_d_from"] = iso_from
@@ -950,11 +1012,11 @@ class DataRepository:
         sql = f"SELECT * FROM {safe_t}"
         if where_clauses:
             sql += " WHERE " + " AND ".join(where_clauses)
-        # 日期区间 + LIMIT 而无显式排序时，默认按日期倒序：让 LIMIT 取区间内
-        # **最新** 的行。否则 SQLite 按插入序返回前 N 行（日频大表=区间最旧的
-        # 一小段），再在内存里倒序 → 查询结果被截断到旧日期（基金/日频表问题）。
+        # 任何带 LIMIT 的范围过滤（日期区间或 filters，如 code=）而无显式排序时，
+        # 都默认按日期倒序：让 LIMIT 取**最新**的行（日期过滤走索引；code 过滤同理）。
+        # 否则 SQLite 按插入序返回前 N 行，内存里再倒序 → 查询被截断到旧日期。
         order = order_by
-        if not order and date_filtered and limit is not None and date_expr:
+        if not order and limit is not None and date_expr and (date_filtered or filters):
             order = f"{date_expr} DESC"
         if order:
             sql += f" ORDER BY {order}"
@@ -980,6 +1042,57 @@ class DataRepository:
             return [str(r[0]) for r in rows]
         except Exception:
             return []
+
+    # ------------------------------------------------------------------
+    # 复权因子表（asset_adj_factor）只读查询
+    # ------------------------------------------------------------------
+
+    def query_adj_factors(
+        self,
+        asset_type: str,
+        codes: list[str],
+        limit: int | None = None,
+    ) -> pd.DataFrame:
+        """查询复权因子（asset_type + 多个 code 的全量因子序列，按日期升序）
+
+        供 /data?adj= 派生：需该 code 全序列因子（qfq 的 latest 归一化点）。
+        codes 为空 / 表不存在 → 空 DataFrame。code 值来自白名单表内已有值，
+        仍走 _quote_table 防注入。
+        """
+        codes = [c for c in (codes or []) if c is not None and str(c).strip()]
+        if not codes or not self.table_exists("asset_adj_factor"):
+            return pd.DataFrame()
+        safe_t = self._quote_table("asset_adj_factor")
+        placeholders = ",".join(f":_c{i}" for i in range(len(codes)))
+        params: dict[str, Any] = {"_at": asset_type}
+        params.update({f"_c{i}": c for i, c in enumerate(codes)})
+        sql = (f"SELECT * FROM {safe_t} WHERE asset_type = :_at "
+               f"AND code IN ({placeholders}) ORDER BY date ASC")
+        if limit is not None:
+            sql += f" LIMIT {int(limit)}"
+        with self.engine.connect() as conn:
+            return pd.read_sql_query(sql, conn, params=params)
+
+    def get_adj_factor_max_date(self, asset_type: str):
+        """取某 asset_type 复权因子的最大日期（date 对象）；表不存在/无数据 → None
+
+        增量起点用——两 asset_type 写同一 asset_adj_factor 表，若用
+        meta_sync_jobs.last_sync_date 会互相污染，故按 asset_type 分列取 MAX。
+        """
+        if not self.table_exists("asset_adj_factor"):
+            return None
+        try:
+            with self.engine.connect() as conn:
+                val = conn.execute(
+                    text('SELECT MAX(date) FROM asset_adj_factor '
+                         'WHERE asset_type = :_at'),
+                    {"_at": asset_type},
+                ).scalar()
+            if not val:
+                return None
+            return date.fromisoformat(str(val)[:10])
+        except Exception:
+            return None
 
     def get_max_date(
         self,

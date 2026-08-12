@@ -32,6 +32,7 @@ _ALTERS = [
     ("meta_indicator", "unit_desc", "VARCHAR(128)", "NULL"),
     ("meta_sync_jobs", "running_status", "VARCHAR(16)", "'idle'"),
     ("meta_sync_jobs", "last_heartbeat", "DATETIME", "NULL"),
+    ("meta_sync_jobs", "last_note", "TEXT", "NULL"),
 ]
 
 

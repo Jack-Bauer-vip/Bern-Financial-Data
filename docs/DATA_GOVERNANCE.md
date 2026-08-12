@@ -59,6 +59,10 @@
 | 2026-08-06 | 默认获信源优先 FRED(level 值),下游消费强制走 `/indicator?transform=` 派生 | FRED 为官方修订后数据,akshare 变化率语义不一致;统一 ODS 层稳定性 |
 | 2026-08-06 | `fund_etf_daily` 2005-2017 数据含封闭式基金/LOF,GUI 显示黄色警告 | 防止下游策略系统将早期非 ETF 产品计入回测,污染统计 |
 | 2026-08-06 | VACUUM 做纯脚本 `scripts_gen/vacuum_and_archive.py`,不做 GUI 设置开关 | 避免撬动 settings_dialog 配置持久化链路;WAL 模式空闲页自动回收,VACUUM 仅作异常膨胀时手动瘦身 |
+| 2026-08-11 | 行情复权:独立复权因子表 `asset_adj_factor(asset_type,code,date,factor)` + 查询端 `/data/{table}?adj=qfq|hfq` 派生,行情表 ODS 原值永不改 | 与「ODS 永不改,只派生」哲学同构,参考 free-stockdb/tdx2db 独立因子表做法;复权口径 qfq=raw×factor/latest、hfq=raw×factor |
+| 2026-08-11 | 股票因子源 tushare `adj_factor`(官方累计因子);ETF 因子源 tushare `fund_adj`,权限不足回退 akshare `fund_etf_hist_em` hfq 序列÷不复权序列反推相对因子 | 回退存 hfq/raw 比值(相对首日归一化),使 qfq 与 hfq 两条派生公式都精确;指数为价格指数无需复权 |
+| 2026-08-11 | 因子同步走按交易日批量(复用基金批量模式),`sync_mode: batch` 标记,增量按 asset_type 的 MAX(date) | 两 asset_type 写同一表,meta_sync_jobs 按 `asset_adj_factor_{asset_type}` 分行,避免表级 last_sync_date 互相污染 |
+| 2026-08-11 | 对外 AI 契约:封装为 Claude Code skill `skills/bern-financial-data/SKILL.md`(装到 `~/.claude/skills/`),采用「静态契约 + 动态发现」;`/data/{table}` 新增 `?code=` 单标的过滤 | 借鉴 a-stock-data:其内嵌取数代码(拉公网 HTTP),本系统已有 FastAPI 分发,故契约只固化「怎么查」(基址/鉴权/日期/响应/transform/adj/format 语义 + 可复制示例),数据清单走 `/sources` `/data/tables` `/indicator` `/boards` 活端点实时发现,防契约过时;`code=` 让单标的行情查询免于全表 300 万行截断;`tests/test_skill_contract.py` 双向校验契约与路由不漂移 |
 
 ---
 
