@@ -123,3 +123,23 @@ def test_bulk_upsert_batch_internal_dupe_counts_once(repo):
                        {"时间": "2026-07-01", "数值": "3.6"}])
     assert repo.bulk_upsert(
         "macro_usa_cpi_yoy", df, unique_columns=["date"]) == 1
+
+
+def test_query_plain_limit_returns_latest_first(repo):
+    """纯 limit 查询（无日期/code 过滤）默认按日期倒序取最新（2026-08-12 修复）
+
+    修复前无 ORDER BY → 按插入序返回库内最旧的行（大表=2014 年老数据），
+    skill/用户「取最新 N 行」会拿到过期数据。
+    """
+    # 按旧→新顺序插入，让插入序 ≠ 日期序
+    with repo.engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO macro_usa_cpi_yoy (\"时间\",\"数值\") VALUES "
+            "('2026-08-01','3.9'), ('2026-06-01','3.2'), ('2026-07-01','3.5')"))
+    df = repo.query("macro_usa_cpi_yoy", limit=2)
+    dates = df["时间"].tolist()
+    assert dates[0] == "2026-08-01"   # 最新在前
+    assert dates[1] == "2026-07-01"
+    # 无 limit（取全量）不受影响，不强制排序
+    all_df = repo.query("macro_usa_cpi_yoy")
+    assert set(all_df["时间"].tolist()) == {"2026-08-01", "2026-07-01", "2026-06-01"}

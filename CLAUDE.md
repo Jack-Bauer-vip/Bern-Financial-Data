@@ -24,7 +24,7 @@
 ```bash
 pip install -e .[dev]        # 安装(dev 含 pytest)
 python src/main.py           # 启动桌面端(start_bern.bat 等效)
-python -m pytest tests/ -q   # 跑测试(当前 315 个全绿)
+python -m pytest tests/ -q   # 跑测试(当前 341 个全绿)
 python scripts_gen/gen_report.py --date 2026-08-04   # 日报 PDF
 python scripts_gen/vacuum_and_archive.py             # DB 瘦身(默认 500MB 阈值,超才 VACUUM)
 python scripts_gen/check_freshness.py --only-stale   # 数据新鲜度(退出码 1=有停更)
@@ -34,9 +34,10 @@ python scripts_gen/sync_fund_batch.py                # 基金日线批量同步(
 python scripts_gen/sync_adj_factor.py --asset-type stock   # 复权因子批量同步(因子表入库)
 python scripts_gen/sync_adj_factor.py --asset-type fund --fallback   # ETF因子 akshare 回退
 python scripts_gen/install_skill.py                        # 对外 SKILL.md 契约装到 ~/.claude/skills
+pip install -e ./clients/berndata_client                   # 下游程序取数用 Python 客户端(薄封装, 独立可安装小包)
 ```
 
-- 本地 API:`http://127.0.0.1:8765`,Swagger 在 `/docs`(版本 0.2.0)。鉴权用 `X-API-Key` 头(非 URL token),`.env` 配 `API_TOKEN`,留空则不鉴权。数据端点 `/indicator/{key}`、`/data/{table}`、`/boards/*` 支持 `?format=json|csv`(csv 走 `text/csv` 下载);`/indicator`、`/boards/*` 支持可选 `?page=&page_size=`(meta.pagination);`/data/{table}` 支持可选 `?adj=qfq|hfq` 复权派生(仅股票/ETF 行情表,指数/宏观 422;行情表存不复权原值,因子表 `asset_adj_factor` 派生)与可选 `?code=` 按 code 列精确过滤(无 code 列的表 422,带 code 绕过缓存下沉 SQL);主题看板见 `GET /api/v1/boards`、`GET /api/v1/boards/{key}`(时序宽表)、`GET /api/v1/boards/{key}/snapshot`(快照)。**对外 AI 契约**:`skills/bern-financial-data/SKILL.md`(装到 `~/.claude/skills/` 供任意 Claude Code 项目查询数据)。
+- 本地 API:`http://127.0.0.1:8765`,Swagger 在 `/docs`(版本 0.2.0)。鉴权用 `X-API-Key` 头(非 URL token),`.env` 配 `API_TOKEN`,留空则不鉴权。数据端点 `/indicator/{key}`、`/data/{table}`、`/boards/*` 支持 `?format=json|csv`(csv 走 `text/csv` 下载);`/indicator`、`/boards/*` 支持可选 `?page=&page_size=`(meta.pagination);`/data/{table}` 支持可选 `?adj=qfq|hfq` 复权派生(仅股票/ETF 行情表,指数/宏观 422;行情表存不复权原值,因子表 `asset_adj_factor` 派生)与可选 `?code=` 按 code 列精确过滤(无 code 列的表 422,带 code 绕过缓存下沉 SQL);主题看板见 `GET /api/v1/boards`、`GET /api/v1/boards/{key}`(时序宽表)、`GET /api/v1/boards/{key}/snapshot`(快照)。**对外 AI 契约**:`skills/bern-financial-data/SKILL.md`(装到 `~/.claude/skills/` 供任意 Claude Code 项目查询数据)。**Python 客户端(下游程序)**:`clients/berndata_client/` 独立可安装小包(`pip install -e ./clients/berndata_client`,可选 `[df]` 带 pandas),自动带鉴权头/统一信封解包(返回 `.data`+`.meta`,`.df` 惰性转 DataFrame)/日期归一(date、datetime、YYYYMMDD、ISO 皆可)/错误抛出(`BernDataError`),曲线方法覆盖全部数据端点(`data`/`stock_daily`/`macro`/`indicator`/`board_snapshot`/`board_series`/`sources`/`tables`/`health`),另有 `request()` 通用逃生舱与 `csv()` 字节下载;契约与 SKILL.md 对齐,测试 `tests/test_data_client.py`(22 个,httpx MockTransport 不依赖真实服务)。
 - 数据源配置在 `config/data_catalog.yaml`(不是写死代码)。改数据源/新增数据源**改 YAML**,树形 GUI 在「分类管理」对话框。
 
 ## 架构总览(数据流水线)

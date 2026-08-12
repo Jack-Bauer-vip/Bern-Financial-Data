@@ -990,9 +990,9 @@ class DataRepository:
         date_expr = None
         if date_from is not None or date_to is not None:
             date_filtered = True
-        # 探测日期列：范围过滤（日期区间或 filters，如 code=）都可能在带 LIMIT
-        # 时需要按日期倒序取最新，统一在此探测 date_expr。
-        if (date_filtered or filters) and date_col is None:
+        # 探测日期列：带 LIMIT 的任何查询（日期区间 / code 过滤 / 纯 limit 切片）
+        # 都可能需要按日期倒序取最新，统一在此探测 date_expr。
+        if (date_filtered or filters or limit is not None) and date_col is None:
             date_col = self._find_date_column(table_name)
         if date_col:
             safe_dc = date_col.replace("\"", "\"\"")
@@ -1012,11 +1012,12 @@ class DataRepository:
         sql = f"SELECT * FROM {safe_t}"
         if where_clauses:
             sql += " WHERE " + " AND ".join(where_clauses)
-        # 任何带 LIMIT 的范围过滤（日期区间或 filters，如 code=）而无显式排序时，
+        # 任何带 LIMIT 的查询（日期区间 / code 过滤 / 纯 limit 切片）而无显式排序时，
         # 都默认按日期倒序：让 LIMIT 取**最新**的行（日期过滤走索引；code 过滤同理）。
-        # 否则 SQLite 按插入序返回前 N 行，内存里再倒序 → 查询被截断到旧日期。
+        # 否则 SQLite 按插入序返回前 N 行 → 纯 limit 切片会拿到库内**最旧**的数据
+        # （2026-08-12 修复：skill/用户「取最新」时不再返回 2014 年旧行）。
         order = order_by
-        if not order and limit is not None and date_expr and (date_filtered or filters):
+        if not order and limit is not None and date_expr:
             order = f"{date_expr} DESC"
         if order:
             sql += f" ORDER BY {order}"
