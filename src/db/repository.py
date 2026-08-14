@@ -517,6 +517,45 @@ class DataRepository:
                 return val.date()
             return val
 
+    def get_last_date_where(
+        self,
+        table_name: str,
+        date_column: str = "date",
+        where_clause: str = "",
+        params: dict | None = None,
+    ) -> date | None:
+        """带 WHERE 条件的最大日期（表不存在返回 None）
+
+        供指数批量增量起点用：index_daily 混跨境/境内，跨境(FRED)日期可能
+        领先境内交易日，增量起点必须按境内(sh/sz)子集取 MAX(date)。
+        仅拼接已引用安全的 where_clause（表/列名已 _quote 转义）。
+        """
+        if not self.table_exists(table_name):
+            return None
+        safe_t = self._quote_table(table_name)
+        safe_c = self._quote_column(date_column)
+        where = f" WHERE {where_clause}" if where_clause else ""
+        with self.engine.connect() as conn:
+            result = conn.execute(
+                text(f"SELECT MAX({safe_c}) FROM {safe_t}{where}"),
+                params or {})
+            val = result.scalar()
+            if val is None:
+                return None
+            if isinstance(val, str):
+                try:
+                    return date.fromisoformat(val)
+                except ValueError:
+                    pass
+                norm = normalize_cn_date_str(val)
+                try:
+                    return pd.to_datetime(norm, errors="raise").date()
+                except (ValueError, TypeError):
+                    return None
+            if isinstance(val, datetime):
+                return val.date()
+            return val
+
     # ------------------------------------------------------------------
     # 唯一索引 / 去重
     # ------------------------------------------------------------------

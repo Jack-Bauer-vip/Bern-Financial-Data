@@ -27,16 +27,17 @@ DEFAULT_CATEGORIES = ["宽基", "行业", "主题", "风格", "策略", "债券"
 # 风格（价值/成长/红利/低波/高贝/质量/规模等；先于主题/行业，避免「300价值」「消费红利」误判）
 _STYLE = (
     "红利", "股息", "低波", "低波动", "波动", "低贝", "高贝", "稳定",
-    "动态", "动量", "质量", "蓝筹", "周期", "非周期",
+    "动态", "动量", "质量", "蓝筹", "周期", "非周期", "非周",
     "大盘价值", "中盘价值", "小盘价值", "大盘成长", "中盘成长", "小盘成长",
     "大盘低波", "中盘低波", "小盘低波", "巨潮大盘", "巨潮中盘", "巨潮小盘",
-    "价值", "成长",
+    "防御", "波指", "价值", "成长",
 )
 
 # 策略（基本面 / ESG 治理责任 / 等权分层 / 现金流）
 _STRATEGY = (
     "基本面", "基本", "ESG", "治理", "责任",
     "等权", "等权重", "EW", "分层", "现金流",
+    "龙头", "绩效", "分析师",
 )
 
 # 央视系列单独前置（「央视成长/回报/治理」整体归策略，不让 成长/回报 抢先归风格）
@@ -59,6 +60,10 @@ _THEME = (
     "次新股", "并购重组", "定向增发", "专利", "中关村", "安防", "科技", "创新",
     "新兴", "创投", "主题", "国企改革",
     "央企", "国企", "民企",   # 所有制主题（上证央企/中证国企/民企200…；红利类被风格优先级抢先）
+    "国有企业", "国有", "民营", "地企", "沪企", "综企", "企综", "沪股通",  # 国企/民企/地企系列全名
+    "高新", "技术领先", "小康", "持续产业", "文化", "海峡", "率先", "金牛",
+    "兴全", "泰达", "银河", "GDP", "时钟", "投资品", "深报",
+    "基金", "ETF", "乐富", "新能", "数字", "软件", "科研",
 )
 
 # 行业（官方宽口径：申万/中证/上证/深证/300/1000/全指行业）
@@ -70,6 +75,8 @@ _INDUSTRY = (
     "零售", "纺织", "轻工", "农业", "农林牧渔", "食品饮料", "食品", "医药", "生物",
     "医疗", "金融", "能源", "材料", "工业", "可选", "消费", "信息", "IT", "电信",
     "资源", "原材料", "有色金属", "大宗商品", "行业", "装备",
+    "上游", "中游", "下游", "制造", "高装", "农林", "采矿", "水电", "公共",
+    "商业", "商务", "服务", "原料", "商品", "大宗",
 )
 
 # 宽基全名白名单（自动底：去掉尾缀「指数」后精确匹配；主流另走 YAML manual）
@@ -156,6 +163,9 @@ def classify_by_heuristics(name: str) -> tuple[str, str] | None:
     for kw in _STYLE:
         if kw in n:
             return "风格", _sub_for_style(n)
+    # 基本面加权 F 系列(上证F200/深证F120…): F+数字 → 策略 基本面
+    if re.search(r"[Ff]\d{2,3}", n):
+        return "策略", "基本面"
     for kw in _BOND:
         if kw in n:
             return "债券", ""
@@ -168,6 +178,18 @@ def classify_by_heuristics(name: str) -> tuple[str, str] | None:
     for kw in _INDUSTRY:
         if kw in n:
             return "行业", ""
+    # 市值规模(宽基)放最后: 风格/主题/策略/行业关键词优先
+    # (如 中小绩效→策略绩效、中小新兴→主题新兴、中小治理→策略治理);
+    # 300沪市/500深市 区域子集、市值百强/中证超级大盘/财富大盘 → 宽基
+    for kw in ("中小", "超大", "大盘", "小盘", "中盘", "百强", "沪市", "深市"):
+        if kw in n:
+            if "大盘" in n or "超大" in n or "百强" in n:
+                return "宽基", "大盘"
+            if "中小" in n or "中盘" in n:
+                return "宽基", "中小盘"
+            if "小盘" in n:
+                return "宽基", "小盘"
+            return "宽基", ""
     return None
 
 
@@ -204,9 +226,14 @@ def build_category_rows(codes_names: dict[str, str], config: dict) -> list[dict]
     [{code, name, category, sub_category, source}]
     """
     manual: dict = config.get("manual", {})
+    global_cfg: dict = config.get("global", {})
     rows: list[dict] = []
 
     for code, name in codes_names.items():
+        # 跨境策划清单统一在下方处理：避免与 meta_asset_info 重叠时
+        # 被自动分类(如 HSI 恒生指数 → 其他)抢先,去重后策划行丢失
+        if code in global_cfg:
+            continue
         name = name or ""
         over = manual.get(code)
         if over:
@@ -225,8 +252,8 @@ def build_category_rows(codes_names: dict[str, str], config: dict) -> list[dict]
             "category": cat, "sub_category": sub, "source": source,
         })
 
-    # 跨境策划清单（分类与数据解耦：无需行情在库也可先分类）
-    for code, item in (config.get("global") or {}).items():
+    # 跨境策划清单（分类与数据解耦：无需行情在库也可先分类；与境内重叠的码以策划为准）
+    for code, item in global_cfg.items():
         rows.append({
             "code": code,
             "name": item.get("name", ""),

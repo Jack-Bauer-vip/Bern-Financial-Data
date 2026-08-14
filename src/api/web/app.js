@@ -23,7 +23,8 @@
     quoteMode: false,   // 行情预设且 OHLC 命中 → 多周期涨跌幅卡片
     rows: [], total: 0,
     page: 1, pageSize: 50, sort: null, sortAsc: false, allCols: false,
-    chartMode: 'line', chart: null,
+    chartMode: 'line', chart: null, hmDate: '',   // hmDate: 热力图当前交易日(空=最新)
+    suppressFocusSearch: false,                   // 分类下拉刚渲染时抑制 focus() 触发的默认搜索覆盖
     tables: [], tableNames: {}, deprecated: new Set(), indicatorMap: {},
     indexCategory: '', indexCatMeta: [],   // 指数 tab 分类筛选(''=全部)
   };
@@ -110,6 +111,27 @@
     els.typeTabs.querySelectorAll('button[data-type]').forEach((b) => {
       b.classList.toggle('active', b.dataset.type === type);
     });
+
+    // 板块热力图: 独立全屏 treemap 视图, 不涉及表/code/口径
+    if (type === 'heatmap') {
+      state.quoteMode = false;
+      state.code = null; state.codeCol = null;
+      state.start = null; state.end = null;   // 日期区间对热力图无意义, 清空防 URL 残留
+      els.startDate.value = ''; els.endDate.value = '';
+      setHeatmapControls(true);
+      els.catChips.hidden = true;
+      els.cards.hidden = true;
+      els.chartSection.hidden = true;
+      els.tableSection.hidden = true;
+      els.emptyHint.hidden = true;
+      els.heatmapSection.hidden = false;
+      loadHeatmap(state.hmDate || '');
+      return;
+    }
+    // 非热力图: 恢复工具栏控件 + 收起热力图区
+    setHeatmapControls(false);
+    els.heatmapSection.hidden = true;
+
     // 切类型即重置: 清 code/codeCol/quoteMode/口径(通用模式防残留上一只代码)
     state.quoteMode = false;
     state.code = null; state.codeCol = null;
@@ -240,6 +262,7 @@
 
   /* ---------- 渲染 ---------- */
   function renderAll() {
+    if (state.type === 'heatmap') return;   // 热力图独立渲染, 不落 cards/chart/table
     renderCards();
     renderChart();
     renderTable();
@@ -297,6 +320,163 @@
      接入点: renderAll() 中调用; 当前为空桩, 不渲染任何 DOM。下周实现。 */
   function renderRangePanel() {
     return;
+  }
+
+  /* ---------- 板块热力图(指数版, 日期筛选 + 概念/行业/核心指数三组网格) ----------
+     每组等大小色块(不按成交量分面积): 颜色 = 涨跌幅 红涨绿跌, 深浅 = 幅度;
+     成交量/收盘/日期 只在鼠标悬停 tooltip 展示。点色块 → 跳到该指数行情视图。 */
+  async function loadHeatmap(date) {
+    try {
+      const params = {};
+      if (date) params.date = date;
+      const body = await fetchJSON('/indices/heatmap', params);
+      if (state.type !== 'heatmap') return;   // 拉取期间切走了 → 丢弃
+      const meta = body.meta || {};
+      state.hmDate = meta.date || '';
+      populateHeatmapDate(meta.dates || [], state.hmDate);
+      renderHeatmapGrid(body.data || [], meta);
+    } catch (e) {
+      toast('热力图加载失败: ' + e.message);
+    }
+  }
+
+  function populateHeatmapDate(dates, cur) {
+    const sel = els.heatmapDate;
+    sel.innerHTML = '';
+    (dates || []).forEach((d) => {
+      const opt = document.createElement('option');
+      opt.value = d; opt.textContent = d;
+      opt.selected = d === cur;
+      sel.appendChild(opt);
+    });
+    els.heatmapHead.hidden = dates.length === 0;
+  }
+
+  function renderHeatmapGrid(items, meta) {
+    const hm = els.heatmap;
+    if (!items.length) {
+      els.emptyHint.textContent = '该交易日暂无指数行情(index_daily 未同步或各指数停牌)。';
+      els.emptyHint.hidden = false;
+      hm.innerHTML = '';
+      return;
+    }
+    els.emptyHint.hidden = true;
+    const order = ['核心指数', '行业', '概念'];
+    const groups = order.map((name) => ({ name, items: items.filter((it) => it.group === name) }))
+      .filter((g) => g.items.length);
+    const byIdx = {};
+    let idx = 0;
+    hm.innerHTML = groups.map((g) =>
+      '<div class="hm-group">' +
+      '<div class="hm-group-title"><span>' + g.name + '</span><em>' + g.items.length + ' 个</em></div>' +
+      '<div class="hm-grid">' +
+      g.items.map((it) => {
+        const cell = hmCellHTML(it, idx);
+        byIdx[idx] = it;
+        idx += 1;
+        return cell;
+      }).join('') +
+      '</div></div>').join('');
+
+    hm.querySelectorAll('.hm-cell').forEach((cell) => {
+      const it = byIdx[+cell.dataset.idx];
+      if (!it) return;
+      cell.addEventListener('mouseenter', (ev) => showHmTooltip(it, ev));
+      cell.addEventListener('mousemove', moveHmTooltip);
+      cell.addEventListener('mouseleave', hideHmTooltip);
+      cell.addEventListener('click', () => onSelectIndex(it.code));
+    });
+  }
+
+  function hmCellHTML(it, idx) {
+    const pct = Stats.toNumber(it.pct_chg);
+    const pctTxt = (pct === null || isNaN(pct)) ? '—' : ((pct >= 0 ? '+' : '') + pct.toFixed(2) + '%');
+    const bg = pctColor(pct);
+    const fg = contrastText(bg);
+    return '<div class="hm-cell" data-idx="' + idx + '" style="background:' + bg + ';color:' + fg + '">' +
+      '<div class="hm-name">' + it.name + '</div>' +
+      '<div class="hm-pct">' + pctTxt + '</div>' +
+      '</div>';
+  }
+
+  /* 浅色底用深字, 深色底用白字(与 pctColor 的深浅底纹配套) */
+  function contrastText(rgbStr) {
+    const m = String(rgbStr).match(/\d+/g);
+    if (!m || m.length < 3) return '#1a1a1a';
+    const lum = 0.2126 * +m[0] + 0.7152 * +m[1] + 0.0722 * +m[2];
+    return lum > 150 ? '#1a1a1a' : '#fff';
+  }
+
+  function showHmTooltip(it, ev) {
+    const pct = Stats.toNumber(it.pct_chg);
+    const cls = (pct !== null && !isNaN(pct)) ? (pct >= 0 ? 'up' : 'down') : '';
+    els.hmTooltip.innerHTML =
+      '<div class="t-title">' + it.name + ' <span class="' + cls + '">' + fmtPct(it.pct_chg) + '</span></div>' +
+      '<div>收盘 ' + Stats.fmtNumber(it.close) + '</div>' +
+      '<div>成交量 ' + fmtVol(it.volume) + '</div>' +
+      '<div class="t-sub">' + (it.category || '') +
+        (it.sub_category ? ' · ' + it.sub_category : '') + ' · ' + (it.date || '') + '</div>';
+    els.hmTooltip.hidden = false;
+    moveHmTooltip(ev);
+  }
+
+  function moveHmTooltip(ev) {
+    const t = els.hmTooltip;
+    const pad = 14;
+    t.style.left = (ev.clientX + pad) + 'px';
+    t.style.top = (ev.clientY + pad) + 'px';
+    const r = t.getBoundingClientRect();
+    if (r.right > window.innerWidth - 8) t.style.left = (ev.clientX - r.width - pad) + 'px';
+    if (r.bottom > window.innerHeight - 8) t.style.top = (ev.clientY - r.height - pad) + 'px';
+  }
+
+  function hideHmTooltip() { els.hmTooltip.hidden = true; }
+
+  /* 涨跌幅 → 方块颜色: 红涨绿跌, ±5% 封顶饱和, |pct|<0.3 视为平(灰) */
+  function pctColor(pct) {
+    const v = Stats.toNumber(pct);
+    if (v === null || isNaN(v)) return '#e3e6ea';
+    const a = Math.abs(v);
+    if (a < 0.3) return '#e3e6ea';
+    const t = Math.min(1, a / 5);              // 5% 内线性饱和
+    if (v > 0) {                               // 浅红 #ef9a9a → 深红 #b71c1c
+      const r = Math.round(239 - 56 * t), g = Math.round(154 - 126 * t), b = Math.round(154 - 126 * t);
+      return 'rgb(' + r + ',' + g + ',' + b + ')';
+    }
+    const r = Math.round(165 - 138 * t), g = Math.round(214 - 120 * t), b = Math.round(167 - 135 * t);
+    return 'rgb(' + r + ',' + g + ',' + b + ')';   // 浅绿 #a5d6a7 → 深绿 #1b5e20
+  }
+
+  function fmtPct(pct) {
+    const v = Stats.toNumber(pct);
+    if (v === null || isNaN(v)) return '—';
+    return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+  }
+
+  function fmtVol(v) {
+    const n = Stats.toNumber(v);
+    if (n === null || isNaN(n)) return '—';
+    if (n >= 1e8) return (n / 1e8).toFixed(2) + ' 亿手';
+    if (n >= 1e4) return (n / 1e4).toFixed(1) + ' 万手';
+    return String(Math.round(n)) + ' 手';
+  }
+
+  function setHeatmapControls(on) {
+    // 热力图不涉及表/日期/code/口径 → 隐藏这些工具栏控件
+    const list = [els.tableSelect, els.startDate, els.dateSep, els.endDate,
+                  els.codeInput, els.adjSelect, els.transformSelect, els.limitSelect, els.queryBtn];
+    list.forEach((el) => { if (el) el.hidden = on; });
+    if (on) hideDropdown();
+  }
+
+  function onSelectIndex(code) {
+    // 点指数方块 → 切到指数预设视图并定位该指数
+    applyPreset('index');
+    state.code = String(code);
+    els.codeInput.value = state.code;
+    if (state.table && state.tables.includes(state.table)) {
+      probeTable().catch((e) => toast('加载失败: ' + e.message));
+    }
   }
 
   function renderChart() {
@@ -383,7 +563,7 @@
       d.className = 'opt';
       d.dataset.code = String(it.code);
       const c = document.createElement('span'); c.className = 'code'; c.textContent = it.code;
-      const n = document.createElement('span'); c.className = 'name'; n.textContent = it.name || '';
+      const n = document.createElement('span'); n.className = 'name'; n.textContent = it.name || '';
       d.appendChild(c); d.appendChild(n);
       d.addEventListener('mousedown', (ev) => { ev.preventDefault(); selectCode(it.code); });
       els.codeDropdown.appendChild(d);
@@ -437,13 +617,13 @@
   async function selectCategory(cat) {
     state.indexCategory = cat || '';
     renderChips();
-    if (!state.codeCol) return;
     els.codeInput.value = '';           // 分类浏览 → 清空旧 code, 下拉展示该类指数
     const params = { limit: 200 };
     if (state.indexCategory) params.category = state.indexCategory;
     try {
       const body = await fetchJSON('/indices', params);
       renderDropdown(body.data || []);
+      state.suppressFocusSearch = true; // 防 focus() 触发的 doSearch('') 覆盖分类结果
       els.codeInput.focus();            // 保持下拉可见, 可继续 ↑/↓/Enter 选择
     } catch (e) { /* 静默 */ }
   }
@@ -459,6 +639,7 @@
     if (state.adj) p.set('adj', state.adj);
     if (state.transform) p.set('transform', state.transform);
     if (state.indexCategory) p.set('category', state.indexCategory);
+    if (state.type === 'heatmap' && state.hmDate) p.set('date', state.hmDate);
     p.set('limit', String(state.limit));
     history.replaceState(null, '', '/dashboard?' + p.toString());
   }
@@ -534,7 +715,7 @@
       const btn = ev.target.closest('button[data-type]');
       if (!btn || btn.dataset.type === state.type) return;
       applyPreset(btn.dataset.type);
-      if (state.table && state.tables.includes(state.table)) {
+      if (state.type !== 'heatmap' && state.table && state.tables.includes(state.table)) {
         probeTable().catch((e) => toast('加载失败: ' + e.message));
       }
     });
@@ -566,6 +747,7 @@
       searchTimer = setTimeout(() => doSearch(els.codeInput.value.trim()), 250);
     });
     els.codeInput.addEventListener('focus', () => {
+      if (state.suppressFocusSearch) { state.suppressFocusSearch = false; return; }
       if (!els.codeInput.value && state.searchTable) doSearch('');
     });
     els.codeInput.addEventListener('keydown', (ev) => {
@@ -609,7 +791,15 @@
       state.page = 1;
       renderTable();
     };
-    window.addEventListener('resize', () => { if (state.chart) state.chart.resize(); });
+    // 热力图: 切换交易日 → 重拉 + 更新 URL 深链
+    els.heatmapDate.onchange = () => {
+      state.hmDate = els.heatmapDate.value;
+      loadHeatmap(state.hmDate);
+      syncUrl();
+    };
+    window.addEventListener('resize', () => {
+      if (state.chart) state.chart.resize();
+    });
   }
 
   /* ---------- 初始化 ---------- */
@@ -626,6 +816,9 @@
       pageInfo: $('page-info'), prevPage: $('prev-page'), nextPage: $('next-page'),
       showAllCols: $('show-all-cols'), exportCsvBtn: $('export-csv-btn'),
       catChips: $('cat-chips'), emptyHint: $('empty-hint'),
+      heatmapSection: $('heatmap-section'), heatmap: $('heatmap'),
+      heatmapHead: $('heatmap-head'), heatmapDate: $('heatmap-date'), hmTooltip: $('hm-tooltip'),
+      dateSep: $('date-sep'),
       loading: $('loading'), tokenModal: $('token-modal'), tokenInput: $('token-input'),
       tokenOk: $('token-ok'), tokenCancel: $('token-cancel'), toast: $('toast'),
     });
@@ -640,6 +833,11 @@
     // 读 URL 深链: 优先 type 预设, 再叠加 code/start/end/adj/limit
     const q = new URLSearchParams(location.search);
     const wantType = q.get('type');
+    if (wantType === 'heatmap') {
+      state.hmDate = q.get('date') || '';   // 深链: 板块热力图(可带 ?date= 指定交易日)
+      applyPreset('heatmap');
+      return;
+    }
     const typeValid = wantType && PRESETS[wantType] &&
       (wantType === 'general' || state.tables.includes(PRESETS[wantType].table));
     if (typeValid) {

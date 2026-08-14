@@ -81,6 +81,28 @@ def _clear_ttl_cache():
     ("央企红利", "风格"),            # 风格 先于 主题
     ("国企红利", "风格"),
     ("民企红利", "风格"),
+    # 2026-08-13 补盲区: 所有制全名/产业链/F基本面/市值规模/防御绩效龙头
+    ("中证民营企业综合指数", "主题"),
+    ("中证地方国有企业综合指数", "主题"),
+    ("上证沪企", "主题"),
+    ("上证地企", "主题"),
+    ("上证上游", "行业"),
+    ("中证中游", "行业"),
+    ("深证下游", "行业"),
+    ("上证F200", "策略"),
+    ("深证F120", "策略"),
+    ("市值百强", "宽基"),
+    ("中证超级大盘指数", "宽基"),
+    ("500沪市", "宽基"),
+    ("中国波指", "风格"),
+    ("300非周", "风格"),
+    ("防御100", "风格"),
+    ("中证龙头企业指数", "策略"),
+    ("深证绩效", "策略"),
+    ("国证服务", "行业"),
+    ("基金指数", "主题"),
+    ("中小绩效", "策略"),            # 绩效优先于 中小(宽基尺寸)
+    ("中小新兴", "主题"),            # 新兴优先于 中小
 ])
 def test_classify_by_heuristics(name, category):
     cat, _ = classify_by_heuristics(name)
@@ -96,8 +118,9 @@ def test_heuristics_sub_category_style():
 
 
 def test_heuristics_unknown_falls_other():
-    """无法归类 → None（由上层归「其他」）"""
-    assert classify_by_heuristics("中国波指") is None
+    """无法归类 → None（由上层归「其他」）；波指已补盲区归风格"""
+    assert classify_by_heuristics("B股指数") is None
+    assert classify_by_heuristics("I100") is None
     assert classify_by_heuristics("上证海外") is None       # 手动 YAML 覆盖
     assert classify_by_heuristics("") is None
 
@@ -130,7 +153,8 @@ def test_build_rows_manual_override_and_global():
         "sh000300": "沪深300",      # 自动=宽基，手动覆盖 sub=大盘
         "sh000999": "中证两岸三地500指数",  # 自动=其他，手动覆盖 跨境
         "sz399997": "中证白酒指数",  # 自动=主题
-        "sh000188": "中国波指",      # 无法归类 → 其他
+        "sz399415": "I100",         # 无法归类 → 其他
+        "HSI": "恒生指数",          # 与跨境策划清单重叠 → 以策划(跨境)为准
     }, cfg)
     by_code = {r["code"]: r for r in rows}
     assert by_code["sh000300"] == {
@@ -139,8 +163,8 @@ def test_build_rows_manual_override_and_global():
     assert by_code["sh000999"]["category"] == "跨境"
     assert by_code["sz399997"]["category"] == "主题"
     assert by_code["sz399997"]["source"] == "auto"
-    assert by_code["sh000188"]["category"] == "其他"
-    # 跨境策划清单合并
+    assert by_code["sz399415"]["category"] == "其他"
+    # 跨境策划清单合并；与境内重叠的码以策划为准（不被自动分类归「其他」）
     assert by_code["HSI"]["name"] == "恒生指数"
     assert by_code["HSI"]["category"] == "跨境"
     assert by_code["HSI"]["source"] == "curated"
@@ -150,6 +174,18 @@ def test_build_rows_default_categories_when_missing():
     """YAML 无 categories 段 → 用默认分类顺序"""
     cfg = parse_index_category_config("manual: {}\nglobal: {}\n")
     assert cfg["categories"] == ["宽基", "行业", "主题", "风格", "策略", "债券", "跨境", "其他"]
+
+
+def test_real_config_manual_covers_return_versions():
+    """真实 YAML manual: R/G/V 收益版等已精修(不落「其他」)"""
+    from pathlib import Path
+    cfg = parse_index_category_config(
+        (Path(__file__).resolve().parent.parent / "config" / "index_categories.yaml")
+        .read_text(encoding="utf-8"))
+    for code, exp in {"sz399004": "宽基", "sz399667": "风格", "sz399668": "风格",
+                      "sz399100": "宽基", "sh000888": "宽基", "sh000681": "宽基",
+                      "sz399677": "策略"}.items():
+        assert cfg["manual"][code]["category"] == exp, code
 
 
 # ---------------------------------------------------------------------------

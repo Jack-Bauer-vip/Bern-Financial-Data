@@ -53,6 +53,11 @@ def _is_source_busy(table_name: str) -> bool:
 # 回溯时跳过（幂等优化，避免重复拉取）；< 1000 的必然是子集/缺漏，需补拉。
 FUND_FULL_MARKET_THRESHOLD = 1000
 
+# 指数批量回溯的「已全市场覆盖」阈值（行/交易日）：
+# 境内指数 ~562 只/日；tushare index_daily 按日全市场拉取可映射入库 ~652 行/日。
+# 取 400（安全低于两者，高于任何子集）判断某日已全市场覆盖，回溯时跳过。
+INDEX_FULL_MARKET_THRESHOLD = 400
+
 
 def normalize_ts_code(code: str) -> str:
     """归一化 tushare 代码：有后缀则大写归一，纯 6 位则按前缀推断交易所。
@@ -73,6 +78,23 @@ def normalize_ts_code(code: str) -> str:
 def _strip_exchange(code: str) -> str:
     """去掉 tushare 代码的交易所后缀：159001.SZ → 159001"""
     return re.sub(r"\.(SZ|SH|BJ)$", "", (code or "").strip(), flags=re.I)
+
+
+def _ts_code_to_index_symbol(ts_code: str) -> str | None:
+    """tushare 指数 ts_code → 库内 index_daily.symbol 格式（sh000xxx/sz399xxx）。
+
+    库内境内指数只有 000(→sh)/399(→sz) 两种形态；其余（930xxx/95xxxx/
+    H0xxx 等中证/海外代码）不在库内 → None（调用方 drop）。跨境指数有
+    独立管道(sync_global_index: sina+FRED)，不走本批量。
+    """
+    code = re.sub(r"\.(SH|SZ|BJ|CSI)$", "", (ts_code or "").strip(), flags=re.I)
+    if not re.fullmatch(r"\d{6}", code):
+        return None
+    if code.startswith("000"):
+        return "sh" + code
+    if code.startswith("399"):
+        return "sz" + code
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -259,11 +281,27 @@ class SyncEngine(QObject):
             self._log("INFO", f"开始同步 [{source_key}] -> {table_name}")
             self.sync_started.emit(source_key)
 
-            # ★ 批量模式源（复权因子等基础设施源）：委托到按 asset_type 批量同步。
+            # ★ 批量模式源（复权因子/基金日线/指数日线等）：委托到对应批量方法。
             #    锁在 finally 释放，run_all/API /sync/{key}/定时 全部安全走批量。
-            if source_cfg.get("sync_mode") == "batch":
+            #    sync_mode 值由 config/data_catalog.yaml 驱动（不写死代码）：
+            #      batch              → run_adj_factor_batch(asset_type)
+            #      fund_daily_batch   → run_fund_daily_batch（tushare 全市场按交易日）
+            #      index_daily_batch  → run_index_daily_batch（境内指数按交易日 + akshare 兜底）
+            #    带显式代码（params_override 含 code/symbol/ts_code，如 GUI 选具体
+            #    基金/指数逐只同步）→ 落回逐 code 增量逻辑；无代码（定时调度回调 /
+            #    run_all / 未选代码）→ 走全市场批量。调度回调正是无代码调 run()，
+            #    故配置驱动即能全市场每日更新，同时不破坏逐只同步。
+            batch_mode = source_cfg.get("sync_mode")
+            _override_codes = params_override or {}
+            _has_code = any(str(_override_codes.get(k, "")).strip()
+                            for k in ("code", "symbol", "ts_code"))
+            if batch_mode == "batch":
                 return self.run_adj_factor_batch(
                     asset_type=str(source_cfg.get("asset_type", "")))
+            if batch_mode == "fund_daily_batch" and not _has_code:
+                return self.run_fund_daily_batch()
+            if batch_mode == "index_daily_batch" and not _has_code:
+                return self.run_index_daily_batch()
 
             # 2. 查询上次同步状态
             sync_job = self.repo.get_sync_job(table_name)
@@ -620,6 +658,174 @@ class SyncEngine(QObject):
             df["date"] = pd.to_datetime(
                 df["date"], format="%Y%m%d", errors="coerce").dt.strftime("%Y-%m-%d")
         keep = ["date", "open", "high", "low", "close", "volume", "amount", "code"]
+        keep = [c for c in keep if c in df.columns]
+        return df[keep]
+
+    # ------------------------------------------------------------------
+    # 指数批量同步（按交易日补全市场，tushare index_daily）
+    #
+    # 问题：境内指数逐个 code 走 akshare stock_zh_index_daily，每次全量回传
+    # 历史 ~8000 行只为补 1 天，732 只串行 ~37 分钟。tushare index_daily
+    # (trade_date=) 一次调用返回当天全市场 ~8000 行指数（含中证/海外代码，
+    # 库内境内形态仅 sh000/sz399，映射后 ~652 行入库）。故按交易日批量：
+    # 境内 MAX(date)+1 → 今天，逐交易日拉全市场。补 N 天只需 N 次调用。
+    # 未覆盖的境内指数（sz399xxx 等 tushare 缺失）由 scripts_gen/
+    # sync_index_quick.py 走 akshare 逐只兜底。
+    # ------------------------------------------------------------------
+
+    def run_index_daily_batch(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> int:
+        """按交易日批量补指数日线（tushare 全市场入库），返回写入行数
+
+        增量模式（start_date=None）：起点 = 境内(sh/sz)指数 max(date)+1
+        （跨境/FRED 日期不拖后腿；首次无数据则回补近 1 年），终点 = 今天。
+        回溯模式（start_date 给定）：拉 [start_date, end_date or 今天] 历史
+        全市场，跳过已全市场覆盖日期（行数 >= INDEX_FULL_MARKET_THRESHOLD）。
+        用 tushare trade_cal 拿交易日，逐日 index_daily(trade_date=) 拉取，
+        列规范 + ts_code→symbol(sh000/sz399) 映射后 bulk_upsert。
+        """
+        table_name = "index_daily"
+        pro = self.fetcher.tushare_pro
+        if pro is None:
+            raise DataFetchError("tushare 不可用（token 未配置或初始化失败）")
+
+        # 起点 / 终点：仅按境内指数取增量起点（跨境 FRED 日期可能领先境内交易日）
+        if start_date is not None:
+            start = start_date
+            end = end_date or date.today()
+            self._log(
+                "INFO",
+                f"[指数批量] 回溯模式 {start.isoformat()} ~ {end.isoformat()}"
+                f"（跳过已全市场覆盖日期，阈值 {INDEX_FULL_MARKET_THRESHOLD} 行/日）",
+            )
+        else:
+            dom_max = self.repo.get_last_date_where(
+                table_name, "date", 'symbol LIKE "sh%" OR symbol LIKE "sz%"')
+            if dom_max is None:
+                start = date.today() - timedelta(days=365)
+                self._log("INFO", "[指数批量] 境内指数无数据，首次回补近 1 年")
+            else:
+                start = dom_max + timedelta(days=1)
+                self._log(
+                    "INFO",
+                    f"[指数批量] 境内指数最大日期 {dom_max.isoformat()}，增量起点 {start.isoformat()}",
+                )
+            end = end_date or date.today()
+            if start > end:
+                self._log("INFO", f"[指数批量] 境内指数已到 {dom_max}，无需批量更新")
+                return 0
+
+        # 交易日历
+        try:
+            cal = pro.trade_cal(
+                exchange="SSE",
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+                is_open="1",
+            )
+            trade_days = sorted(cal["cal_date"].tolist())
+        except Exception as exc:
+            raise DataFetchError(f"获取交易日历失败: {exc}")
+        if not trade_days:
+            self._log("INFO", f"[指数批量] {start}~{end} 区间无交易日")
+            return 0
+
+        self._log("INFO", f"[指数批量] 待处理 {len(trade_days)} 个交易日")
+        self.sync_started.emit("index.daily")
+
+        # P1 长任务心跳：进入批量循环即标 running，逐交易日刷新心跳
+        try:
+            self.repo.update_sync_heartbeat(table_name, "running", datetime.now())
+        except Exception:
+            pass
+
+        total = 0
+        failed = 0
+        skipped = 0
+        for d in trade_days:
+            if start_date is not None:
+                iso_d = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+                cnt = self.repo.count_rows_by_date(table_name, "date", iso_d)
+                if cnt >= INDEX_FULL_MARKET_THRESHOLD:
+                    skipped += 1
+                    continue
+            try:
+                df = pro.index_daily(trade_date=d)
+            except Exception as exc:
+                failed += 1
+                self._log("WARNING", f"[指数批量] {d} 拉取失败: {exc}")
+                continue
+            if df is None or df.empty:
+                continue
+            df = self._prepare_index_batch_df(df)
+            if df.empty:
+                continue
+            self.schema_mgr.ensure_columns(table_name, list(df.columns))
+            df = SyncEngine._clean_data(df)
+            added = self.repo.bulk_upsert(
+                table_name, df, unique_columns=["symbol", "date"],
+                batch_size=self.config.get("sync.batch_size", 500))
+            total += added
+            self._log("INFO", f"[指数批量] {d}: 全市场 {len(df)} 行，写入 {added} 行")
+            try:
+                self.repo.update_sync_heartbeat(table_name, "running", datetime.now())
+            except Exception:
+                pass
+            time.sleep(random.uniform(0.3, 0.8))
+
+        # 更新同步任务状态
+        last_date = self.repo.get_last_date_where(
+            table_name, "date", 'symbol LIKE "sh%" OR symbol LIKE "sz%"')
+        row_count = self.repo.count_rows(table_name)
+        self.repo.update_sync_job(table_name, {
+            "display_name": "指数日线",
+            "category": "指数",
+            "api_source": "tushare",
+            "api_function": "index_daily",
+            "last_sync_time": datetime.now(),
+            "last_sync_date": last_date,
+            "row_count": row_count,
+            "status": "completed",
+            "error_message": None,
+            "enabled": True,
+            "running_status": "idle",
+            "last_heartbeat": None,
+        })
+
+        # 清查询缓存
+        try:
+            from src.core.ttl_cache import cache
+            cache.clear()
+        except Exception:
+            pass
+
+        self._log(
+            "INFO",
+            f"[指数批量] 完成，共写入 {total} 行"
+            f"（失败 {failed}，跳过已覆盖 {skipped} 个交易日）",
+        )
+        self.sync_completed.emit("index.daily", total)
+        return total
+
+    @staticmethod
+    def _prepare_index_batch_df(df: pd.DataFrame) -> pd.DataFrame:
+        """tushare index_daily 全市场返回 → 目标表规范列
+
+        ts_code(000001.SH)→symbol(sh000001)、trade_date→date、vol→volume；
+        无法映射到库内形态(sh000/sz399)的行（93xxxx/95xxxx/H 等中证/海外
+        代码）丢弃；date 转 ISO。
+        """
+        df = df.rename(columns={"ts_code": "symbol", "trade_date": "date", "vol": "volume"})
+        if "symbol" in df.columns:
+            df["symbol"] = df["symbol"].map(_ts_code_to_index_symbol)
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(
+                df["date"], format="%Y%m%d", errors="coerce").dt.strftime("%Y-%m-%d")
+        df = df.dropna(subset=["symbol", "date"])
+        keep = ["date", "open", "high", "low", "close", "volume", "amount", "symbol"]
         keep = [c for c in keep if c in df.columns]
         return df[keep]
 

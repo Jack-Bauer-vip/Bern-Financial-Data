@@ -52,13 +52,28 @@ def test_plan_global_dual_param():
                      "fetchable": True}]
 
 
-def test_plan_em_blocked():
-    """em(东财)被墙：fetchable=False，仅分类待补数据"""
+def test_plan_em_fred_routed():
+    """em(东财)被墙 → 美股 SPX/NDX/DJI 改走 index.fred（FRED 序列），可拉取"""
     sgi = _import_script()
     plan = sgi.build_sync_plan({
         "SPX": {"name": "标普500指数", "api_function": "index_global_hist_em"},
+        "NDX": {"name": "纳斯达克100指数", "api_function": "index_global_hist_em"},
     })
     assert plan[0]["code"] == "SPX"
+    assert plan[0]["source_key"] == "index.fred"
+    assert plan[0]["params"] == {"series": "SP500", "symbol": "SPX"}
+    assert plan[0]["fetchable"] is True
+    assert plan[1]["code"] == "NDX"
+    assert plan[1]["params"]["series"] == "NASDAQ100"
+
+
+def test_plan_em_unknown_blocked():
+    """em 但不在 FRED 映射（将来新增）→ 仍待补"""
+    sgi = _import_script()
+    plan = sgi.build_sync_plan({
+        "XYZ": {"name": "未知美股指数", "api_function": "index_global_hist_em"},
+    })
+    assert plan[0]["code"] == "XYZ"
     assert plan[0]["fetchable"] is False
 
 
@@ -157,6 +172,55 @@ def test_run_hk_injects_hsi(engine_env):
     df = repo.query("index_daily", filters={"symbol": "HSI"})
     assert len(df) == 2
     assert df.iloc[0]["amount"] == "259685732142"  # amount 列保留
+
+
+def test_fred_index_sync_writes_close_only(engine_env, monkeypatch):
+    """FRED 补数：{date,value} → index_daily 只写 date/close/symbol，无 OHLC"""
+    repo, schema, engine, fetcher = engine_env
+    sgi = _import_script()
+    from src.utils.config import ConfigManager
+    config = ConfigManager()
+
+    def fake_fetch(series_id, api_key, observation_start=None, observation_end=None,
+                   base_url=None, timeout=30):
+        assert series_id == "SP500"
+        return pd.DataFrame({
+            "date": ["2026-08-10", "2026-08-11"],
+            "value": ["5500.5", "5520.3"],
+        })
+
+    monkeypatch.setattr("src.core.fred_client.fetch_series", fake_fetch)
+    n = sgi.sync_fred_index(repo, schema, config, "SPX", "SP500")
+    assert n == 2
+    df = repo.query("index_daily", filters={"symbol": "SPX"})
+    assert len(df) == 2
+    assert df.iloc[0]["close"] == "5500.5"
+    assert df.iloc[0]["open"] is None          # 无 OHLC 留空
+
+
+def test_fred_index_incremental_start(engine_env, monkeypatch):
+    """增量：已有数据 → observation_start = max(date)+1"""
+    repo, schema, engine, fetcher = engine_env
+    sgi = _import_script()
+    from src.utils.config import ConfigManager
+    config = ConfigManager()
+    # 先放一行已有数据（表需先建，engine_env 只建 meta 表）
+    schema.ensure_table_exists(
+        "index_daily", ["date", "open", "high", "low", "close", "volume", "amount", "symbol"])
+    pd.DataFrame({"date": ["2026-08-10"], "close": ["5500.5"],
+                  "symbol": ["SPX"]}).pipe(
+        lambda d: repo.bulk_upsert("index_daily", d, unique_columns=["symbol", "date"]))
+
+    seen = {}
+
+    def fake_fetch(series_id, api_key, observation_start=None, observation_end=None,
+                   base_url=None, timeout=30):
+        seen["start"] = observation_start
+        return pd.DataFrame({"date": ["2026-08-11"], "value": ["5520.3"]})
+
+    monkeypatch.setattr("src.core.fred_client.fetch_series", fake_fetch)
+    sgi.sync_fred_index(repo, schema, config, "SPX", "SP500")
+    assert seen["start"] == "2026-08-11"
 
 
 def test_script_names_write_and_read(engine_env):

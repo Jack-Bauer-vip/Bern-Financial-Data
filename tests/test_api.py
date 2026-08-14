@@ -51,6 +51,8 @@ def test_health(client):
     body = r.json()
     assert body["status"] == "ok"
     assert body["scheduler_running"] is False
+    # 就绪标记字段存在（A/B 读前校验新鲜度用；值可能为 None——测试库无行情表）
+    assert "data_asof" in body
 
 
 def test_health_scheduler_running(client_with_scheduler):
@@ -403,3 +405,26 @@ def test_auth_public_paths_exempt(client_with_token):
 def test_auth_no_token_configured_allows(client):
     """未配置 token → 全部放行（默认行为）"""
     assert client.get("/api/v1/data/tables").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# 定时调度注册（第一刀: 行情纳入每日自动同步）
+# ---------------------------------------------------------------------------
+
+
+def test_scheduler_registers_market_daily_jobs():
+    """行情类已纳入定时调度：fund.etf_daily / index.daily 注册了 cron 任务"""
+    from src.core.scheduler import DataScheduler
+    from src.utils.config import ConfigManager
+    scheduler = DataScheduler()
+    try:
+        scheduler.register_category_jobs(
+            ConfigManager().catalog.get("categories", []), lambda *a, **k: None)
+        scheduler.start()  # get_jobs 依赖已启动调度器的 next_run_time
+        jobs = scheduler.get_jobs()
+        job_ids = {j["id"] for j in jobs}
+        assert "sync_fund.etf_daily" in job_ids
+        assert "sync_index.daily" in job_ids
+    finally:
+        if scheduler.is_running():
+            scheduler.stop()

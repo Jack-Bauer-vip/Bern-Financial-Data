@@ -18,10 +18,11 @@
       <button data-type="index">指数</button>
       <button data-type="etf">ETF</button>
       <button data-type="stock">股票</button>
+      <button data-type="heatmap">板块热力图</button>
     </div>
     <select id="table-select" title="数据表"></select>
     <input type="date" id="start-date" title="开始日期(YYYYMMDD)">
-    <span class="sep">~</span>
+    <span class="sep" id="date-sep">~</span>
     <input type="date" id="end-date" title="结束日期">
     <div class="searchbox" id="searchbox" title="按 code 精确过滤">
       <input type="text" id="code-input" placeholder="代码(如 518880)" autocomplete="off" hidden>
@@ -50,6 +51,15 @@
 </header>
 
 <div id="cat-chips" class="cat-chips" hidden></div>
+
+<section id="heatmap-section" class="heatmap-box" hidden>
+  <div class="heatmap-head" id="heatmap-head">
+    <label>交易日 <select id="heatmap-date"></select></label>
+    <span class="hm-legend">红=涨 绿=跌, 深浅=幅度(±5% 封顶); 成交量悬停查看</span>
+  </div>
+  <div id="heatmap" class="heatmap"></div>
+</section>
+<div id="hm-tooltip" class="hm-tooltip" hidden></div>
 
 <main>
   <div id="empty-hint" class="empty-hint" hidden></div>

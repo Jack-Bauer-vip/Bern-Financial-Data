@@ -105,6 +105,17 @@ async def health_check(repo=Depends(get_repo)):
 
     scheduler_running = bool(_scheduler and _scheduler.is_running())
 
+    # 就绪标记 data_asof：A/B 读前校验新鲜度（优先就绪标记文件，缺省兜底核心行情表）
+    data_asof: str | None = None
+    try:
+        from src.core.sync_ready import load_sync_ready, compute_data_asof
+        marker = load_sync_ready()
+        data_asof = (marker or {}).get("data_asof")
+        if not data_asof:
+            data_asof = compute_data_asof(repo)
+    except Exception:
+        data_asof = None
+
     stale_list: list[dict] = []
     try:
         from src.core.freshness import collect_source_freshness
@@ -130,6 +141,7 @@ async def health_check(repo=Depends(get_repo)):
         scheduler_running=scheduler_running,
         stale_sources=stale_list,
         stale_count=len(stale_list),
+        data_asof=data_asof,
     )
 
 
@@ -1020,6 +1032,125 @@ async def list_indices(
         total=len(items),
         source="index_categories",
         meta={"categories": cats, "category_filter": category or ""},
+    )
+
+
+_HEATMAP_GROUP_MAP = {"宽基": "核心指数", "行业": "行业", "主题": "概念"}
+_HEATMAP_GROUP_ORDER = ("核心指数", "行业", "概念")
+
+
+def _build_index_heatmap(repo, date: str | None = None) -> dict:
+    """板块热力图数据: 指定日期(默认最新交易日)境内指数的涨跌幅+成交量
+
+    - 三组: 核心指数(宽基)/行业(行业)/概念(主题); 风格/策略/债券/跨境/其他 不展示。
+    - 涨跌幅 = 目标日收盘 / 该指数前一个交易日收盘 - 1; volume 取目标日(前端 tooltip 用)。
+    - 返回 {date, dates, groups, items}:
+        date   目标日 ISO; dates 可用交易日历(倒序, 供日期下拉);
+        groups [{key, name, count}] 三组计数; items 各指数明细。
+    """
+    import pandas as pd
+    from sqlalchemy import text
+
+    cats = repo.get_index_categories()
+    group_codes = {c["code"]: c for c in cats
+                   if c["category"] in _HEATMAP_GROUP_MAP}
+    empty = {"date": "", "dates": [], "groups": [], "items": []}
+    if not group_codes:
+        return empty
+    codes = list(group_codes)
+
+    # 1) 可用交易日历(三组码全部交易日, 倒序)——供日期下拉 + 最新日期判定
+    placeholders = ", ".join(f":c{i}" for i in range(len(codes)))
+    params = {f"c{i}": c for i, c in enumerate(codes)}
+    with repo.engine.connect() as conn:
+        cal = conn.execute(text(
+            f'SELECT DISTINCT date FROM index_daily '
+            f'WHERE symbol IN ({placeholders}) AND date IS NOT NULL '
+            f'ORDER BY date DESC'
+        ), params).fetchall()
+    dates = [str(r[0]) for r in cal]
+    if not dates:
+        return empty
+    target = date or dates[0]
+
+    # 2) 目标日及其前 12 自然日的行情窗口(按码过滤, 走 date+symbol 索引)
+    from datetime import timedelta
+
+    d0 = (pd.Timestamp(target) - pd.Timedelta(days=12)).strftime("%Y-%m-%d")
+    params["d0"] = d0
+    params["d1"] = target
+    with repo.engine.connect() as conn:
+        df = pd.read_sql_query(text(
+            f'SELECT symbol, date, close, volume FROM index_daily '
+            f'WHERE symbol IN ({placeholders}) AND date >= :d0 AND date <= :d1'
+        ), conn, params=params)
+    if df.empty:
+        return {**empty, "date": target, "dates": dates}
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    target_ts = pd.Timestamp(target)
+
+    items: list[dict] = []
+    for code, g in df.groupby("symbol"):
+        g = g.dropna(subset=["close"]).sort_values("date")
+        todays = g[g["date"] == target_ts]
+        if todays.empty:
+            continue                      # 目标日停牌 → 不展示
+        today = todays.iloc[-1]
+        prevs = g[g["date"] < target_ts]
+        if prevs.empty:
+            continue                      # 无前收盘 → 无法算涨跌幅
+        prev = prevs.iloc[-1]
+        info = group_codes[code]
+        pct = (float(today["close"]) - float(prev["close"])) / float(prev["close"]) * 100
+        items.append({
+            "code": code,
+            "name": info.get("name", code),
+            "category": info.get("category", ""),
+            "sub_category": info.get("sub_category", "") or "",
+            "group": _HEATMAP_GROUP_MAP[info["category"]],
+            "date": target,
+            "close": round(float(today["close"]), 4),
+            "pct_chg": round(pct, 2),
+            "volume": float(today["volume"]) if pd.notna(today["volume"]) else None,
+        })
+    group_order = {g: i for i, g in enumerate(_HEATMAP_GROUP_ORDER)}
+    items.sort(key=lambda r: (group_order.get(r["group"], 99), -(r["pct_chg"] or 0)))
+    groups = [{"key": g, "name": g,
+               "count": sum(1 for it in items if it["group"] == g)}
+              for g in _HEATMAP_GROUP_ORDER]
+    return {"date": target, "dates": dates, "groups": groups, "items": items}
+
+
+@router.get("/indices/heatmap", tags=["数据分发"])
+async def index_heatmap(
+    date: str = Query(None, description="目标日期 YYYYMMDD 或 YYYY-MM-DD（默认最新交易日；无效日期 422）"),
+    repo=Depends(get_repo),
+):
+    """板块热力图数据（指数版）— 指定日期涨跌幅 + 成交量, 概念/行业/核心指数三组
+
+    - 三组: 核心指数(宽基)/行业(行业)/概念(主题); 风格/策略/债券/跨境/其他 不展示。
+    - 涨跌幅 = 目标日收盘/前交易日收盘 - 1; volume 供 tooltip(不参与面积/大小)。
+    - meta: {date, dates(可用交易日历, 供日期下拉), groups=[{key,name,count}], count_by_group}
+    - TTL 缓存按日期隔离（同步成功会全清缓存，双保险）
+    """
+    from src.core.ttl_cache import cache
+
+    iso_date = _ymd_to_iso(date) if date else None
+    cache_key = f"index_heatmap_{iso_date or 'latest'}"
+    body = cache.get(cache_key)
+    if body is None:
+        body = _build_index_heatmap(repo, iso_date)
+        cache.set(cache_key, body, ttl=60)
+    if iso_date and iso_date not in body["dates"]:
+        raise HTTPException(422, f"{iso_date} 无指数行情（可选日期见 meta.dates）")
+    return DataResponse(
+        data=body["items"],
+        total=len(body["items"]),
+        source="index_heatmap",
+        meta={"date": body["date"], "dates": body["dates"], "groups": body["groups"],
+              "count_by_group": {g["key"]: g["count"] for g in body["groups"]}},
     )
 
 

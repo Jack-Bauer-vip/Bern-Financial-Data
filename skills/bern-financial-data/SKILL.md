@@ -15,11 +15,12 @@ version: 1.1.0
 
 ```bash
 curl http://127.0.0.1:8765/api/v1/health
-# → {"status":"ok","version":"0.2.0", ... ,"scheduler_running":true,"stale_sources":[...],"stale_count":N}
+# → {"status":"ok","version":"0.2.0", ... ,"scheduler_running":true,"data_asof":"2026-08-12","stale_sources":[...],"stale_count":N}
 ```
 
 - **连接被拒 / 超时** → 数据服务未运行。不要编造数据,告知用户启动服务(Windows 下运行项目 `start_bern.bat`,或 `python src/main.py`),然后重试。
 - `health.status=="ok"` 即服务就绪;`stale_sources`/`stale_count` 是滞后/停更源清单,可作数据新鲜度参考。
+- `health.data_asof` = 数据最新交易日(就绪标记,更新完写 `data/sync_ready.json`);程序化消费前可先校验该值与期望交易日差距,过期则降级 fallback。
 
 ## 1. 鉴权契约
 
@@ -59,7 +60,7 @@ print(r.json())
 | `GET /api/v1/indicator` | 归一化指标清单: `[{indicator_key, preferred_table, source_api, date_column, value_column, unit_type, unit_desc}]` | 找宏观指标键(如 `us.cpi`),推荐优先走指标端点 |
 | `GET /api/v1/boards` | 主题看板清单: `[{key, name, description, item_count, date_start, date_end}]` | 找主题键,看预定义看板 |
 | `GET /api/v1/search` | 表内代码搜索: `[{code, name, table}]` + `meta.code_column` | 代码/中文名/拼音模糊匹配,拿行情表的 code(供 ?code= 过滤) |
-| `GET /api/v1/health` | `stale_sources` 滞后源 | 了解数据新鲜度,判断「最新」到什么日期 |
+| `GET /api/v1/health` | `stale_sources` 滞后源 + `data_asof` 最新交易日 | 了解数据新鲜度,判断「最新」到什么日期;程序化消费前校验 `data_asof` |
 
 **数据类型总览**(当前目录):
 
@@ -90,6 +91,7 @@ ETF基金日线   → 表 fund_etf_daily (支持 ?adj=, 2700+ 只)
 | `/api/v1/data/{table_name}` | GET | **通用数据表查询**(数据分发) | `start_date` `end_date`(YYYYMMDD) `limit`(≤100000,默认200) `fields`(逗号分隔列) `format`(json\|csv) `adj`(qfq\|hfq) `code`(按代码列 **code/symbol/ts_code** 任一精确过滤) |
 | `/api/v1/search` | GET | **表内代码搜索**(代码/中文名/拼音) | `q`(空=前 limit 个) `table`(**必填**) `limit`(≤50,默认20);只返回表内实际存在的 code |
 | `/api/v1/indices` | GET | **指数分类清单**(理杏仁式:宽基/行业/主题/风格/策略/债券/跨境/其他,含跨境) | `category`(精确分类过滤) `q`(code/名称模糊,字母码大小写不敏感) `limit`(≤1000,默认500);`meta.categories`=`[{category,count}]` 分类计数 |
+| `/api/v1/indices/heatmap` | GET | **指数板块热力图数据**(概念/行业/核心指数三组, 等大小色块) | `date`(可选, YYYYMMDD 或 YYYY-MM-DD, 默认最新交易日, 无效 422);每项 `{code,name,category,sub_category,group,date,close,pct_chg,volume}`(涨跌幅=目标日收盘/前交易日收盘-1, 成交量仅供 tooltip 不作面积);`meta.dates` 可用交易日历、`meta.groups` 三组计数、`meta.count_by_group` |
 | `/api/v1/stock/daily` | GET | A股日线(按代码) | `symbol`(**必填**) `start_date` `end_date` `limit`(≤50000) |
 | `/api/v1/macro/{table_name}` | GET | 宏观表查询(白名单) | `start_date` `end_date` `limit`(≤10000);表名可省 `macro_` 前缀 |
 | `/api/v1/macro/cpi` | GET | CPI 聚合(多张 CPI 表归并) | `indicator`(名称模糊) `start_date` `end_date` `limit` |
@@ -222,8 +224,19 @@ curl "http://127.0.0.1:8765/api/v1/indices?category=跨境&limit=50"
 import requests
 cats = {c["category"]: c["count"] for c in
         requests.get("http://127.0.0.1:8765/api/v1/indices").json()["meta"]["categories"]}
-# {'宽基':74,'行业':226,'主题':115,'风格':108,'策略':60,'债券':20,'跨境':18,'其他':127} (748 条)
+# {'宽基':94,'行业':254,'主题':164,'风格':114,'策略':76,'债券':20,'跨境':18,'其他':8} (748 条)
 # 拿到 code 后按 ?code= 取行情: HSI 恒生 / NKY 日经 / sh000300 沪深300 …
+```
+
+板块热力图(指定交易日, 概念/行业/核心指数三组; 涨跌幅=目标日对前收盘环比, 成交量悬停 tooltip):
+
+```bash
+curl "http://127.0.0.1:8765/api/v1/indices/heatmap?date=20260811"
+# → {"total":..., "meta":{"date":"2026-08-11","dates":["2026-08-11","2026-08-10",...],
+#    "groups":[{"key":"核心指数","count":81},{"key":"行业","count":180},{"key":"概念","count":116}],
+#    "count_by_group":{"核心指数":81,"行业":180,"概念":116}},
+#    "data":[{"code":"sh000300","name":"沪深300","group":"核心指数","category":"宽基",
+#              "date":"2026-08-11","close":"3989.03","pct_chg":0.35,"volume":149187576}, ...]}
 ```
 
 ## 6. 边界 / 不做什么

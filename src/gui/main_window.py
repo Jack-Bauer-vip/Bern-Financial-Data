@@ -264,16 +264,17 @@ class TestWorker(QObject):
         fetcher = DataFetcher(ConfigManager())
 
         test_cases = [
-            ("macro_china_cpi", {}, "中国CPI"),
-            ("stock_zh_a_hist", {"symbol": "000001", "period": "daily",
-                                 "start_date": "20260701", "end_date": "20260728"}, "A股日线"),
+            ("macro_china_cpi", {}, "中国CPI", "akshare"),
+            # 2026-08-13 股票源迁移 tushare(东财 akshare 被阻断) → 连通性测试改用 tushare daily
+            ("daily", {"ts_code": "000001.SZ", "start_date": "20260701",
+                       "end_date": "20260728"}, "A股日线", "tushare"),
         ]
 
         results = []
-        for func_name, params, label in test_cases:
+        for func_name, params, label, api_source in test_cases:
             start = time.time()
             try:
-                cfg = {"api_source": "akshare", "api_function": func_name}
+                cfg = {"api_source": api_source, "api_function": func_name}
                 df = fetcher.fetch(cfg, params)
                 elapsed = time.time() - start
                 if df is not None and not df.empty:
@@ -1125,15 +1126,16 @@ class MainWindow(QMainWindow):
             try:
                 fetcher = DataFetcher(ConfigManager())
                 test_cases = [
-                    ("macro_china_cpi", {}, "中国CPI"),
-                    ("stock_zh_a_hist", {"symbol": "000001", "period": "daily",
-                                         "start_date": "20260701", "end_date": "20260728"}, "A股日线"),
+                    ("macro_china_cpi", {}, "中国CPI", "akshare"),
+                    # 2026-08-13 股票源迁移 tushare(东财 akshare 被阻断) → 连通性测试改用 tushare daily
+                    ("daily", {"ts_code": "000001.SZ", "start_date": "20260701",
+                               "end_date": "20260728"}, "A股日线", "tushare"),
                 ]
                 results = []
-                for func_name, params, label in test_cases:
+                for func_name, params, label, api_source in test_cases:
                     start = time.time()
                     try:
-                        cfg = {"api_source": "akshare", "api_function": func_name}
+                        cfg = {"api_source": api_source, "api_function": func_name}
                         df = fetcher.fetch(cfg, params)
                         elapsed = time.time() - start
                         if df is not None and not df.empty:

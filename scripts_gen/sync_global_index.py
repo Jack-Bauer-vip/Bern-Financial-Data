@@ -12,7 +12,8 @@
   · stock_hk_index_daily_sina → index.hk 源，symbol 即库内 code（HSI/HSCEI/HSTECH）
   · index_global_hist_sina    → index.global 源，新浪 symbol 用中文名（如「法国CAC40指数」）、
                                 code 用拉丁码（CAC）→ 双参注入：symbol 给 API、code 写 symbol 列
-  · index_global_hist_em     → 美股(SPX/NDX/DJI)，当前网络 em 被墙 → 跳过仅提示，em 可达后重跑自动补
+  · index_global_hist_em     → 美股(SPX/NDX/DJI)，当前网络 em 被墙 → 改用 FRED 官方收盘点位补数
+                               （SPX→SP500 / NDX→NASDAQ100 / DJI→DJIA），em 将来可达再全量覆盖补 OHLC
 - 与 index.daily 共用 index_daily 表：?code=HSI 过滤、(symbol,date) 唯一键去重，全兼容。
 - 同时写 meta_asset_info(asset_type=index) 名称 → 看板 /search 下拉可搜「恒生/日经」。
 - 旁路维护，不触发 API TTL 缓存失效；/data 带 code 下沉 SQL 绕缓存，立即可见。
@@ -61,8 +62,12 @@ GLOBAL_SINA_SYMBOL = {
     "AS51": "澳大利亚标准普尔200指数",  # sina 键是「标准普尔」非「标普」（实测）
 }
 
-# em（东财）暂不可达的取数函数（仅分类，数据待补）
-EM_BLOCKED_FUNCS = {"index_global_hist_em"}
+# 美股指数 → FRED 官方序列（东财 em 在本机被墙，FRED 给日频收盘点位，无 OHLC）
+FRED_INDEX_SERIES = {
+    "SPX": "SP500",      # 标普500（FRED 近 10 年）
+    "NDX": "NASDAQ100",  # 纳斯达克100（FRED 1986 起）
+    "DJI": "DJIA",       # 道琼斯工业平均（FRED 近 10 年）
+}
 
 
 def load_global_cfg() -> dict:
@@ -76,7 +81,8 @@ def build_sync_plan(global_cfg: dict) -> list[dict]:
 
     - stock_hk_index_daily_sina → index.hk，symbol=code（港股）
     - index_global_hist_sina    → index.global，symbol=中文名 + code=库内码（双参注入）
-    - index_global_hist_em 等   → fetchable=False（em 被墙，仅分类，数据待补）
+    - index_global_hist_em      → code 在 FRED_INDEX_SERIES 内走 index.fred（FRED 收盘点位补数）；
+                                  否则 fetchable=False（em 被墙，仅分类，数据待补）
     """
     plan: list[dict] = []
     for code, item in (global_cfg or {}).items():
@@ -92,9 +98,47 @@ def build_sync_plan(global_cfg: dict) -> list[dict]:
                 continue
             plan.append({"code": code, "source_key": "index.global",
                          "params": {"symbol": sym, "code": code}, "fetchable": True})
+        elif fn == "index_global_hist_em" and code in FRED_INDEX_SERIES:
+            plan.append({"code": code, "source_key": "index.fred",
+                         "params": {"series": FRED_INDEX_SERIES[code], "symbol": code},
+                         "fetchable": True})
         else:
             plan.append({"code": code, "source_key": "", "params": {}, "fetchable": False})
     return plan
+
+
+def sync_fred_index(repo, schema, config, code: str, series_id: str) -> int:
+    """FRED 补美股指数收盘点位 → index_daily(date/close/symbol)
+
+    FRED 序列只返回 {date, value}（收盘点位），无 OHLC → open/high/low/volume/amount
+    留空(NULL)。东财 em 将来可达后重跑 em 全量覆盖即可补全 OHLC。
+    增量：按该 symbol 表内 max(date) 起拉（FRED observation_start 含边界 → +1 天）。
+    """
+    from sqlalchemy import text
+
+    import pandas as pd
+    from src.core.fred_client import fetch_series
+
+    schema.ensure_table_exists(
+        "index_daily", ["date", "open", "high", "low", "close", "volume", "amount", "symbol"])
+    start = None
+    with repo.engine.connect() as conn:
+        max_date = conn.execute(
+            text('SELECT MAX("date") FROM "index_daily" WHERE "symbol" = :s'),
+            {"s": code}).scalar()
+    if max_date:
+        start = (pd.to_datetime(max_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    df = fetch_series(series_id, config.fred_api_key, observation_start=start,
+                      timeout=float(config.get("sync.request_timeout", 30)))
+    if df.empty:
+        return 0
+    df = df.dropna(subset=["value"])              # FRED "." 缺失已转 NaN → 丢弃
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    df = df.rename(columns={"value": "close"})
+    df["symbol"] = code
+    return repo.bulk_upsert("index_daily", df[["date", "close", "symbol"]],
+                            unique_columns=["symbol", "date"])
 
 
 def asset_name_rows(global_cfg: dict) -> list[dict]:
@@ -125,7 +169,8 @@ def main() -> None:
     fetchable = [p for p in plan if p["fetchable"]]
     blocked = [p for p in plan if not p["fetchable"]]
     print(f"global 段 {len(cfg)} 个: 可拉取 {len(fetchable)} (港股 {sum(1 for p in fetchable if p['source_key']=='index.hk')}"
-          f" + 全球 {sum(1 for p in fetchable if p['source_key']=='index.global')}); em 待补 {len(blocked)}")
+          f" + 全球 {sum(1 for p in fetchable if p['source_key']=='index.global')}"
+          f" + FRED美股 {sum(1 for p in fetchable if p['source_key']=='index.fred')}); em 待补 {len(blocked)}")
     if blocked:
         print("  跳过(em 东财当前网络被墙, 数据待补, 分类已在): "
               + ", ".join(p["code"] for p in blocked))
@@ -138,7 +183,8 @@ def main() -> None:
 
     config = ConfigManager()
     repo = DataRepository(get_engine())
-    engine = SyncEngine(DataFetcher(config), repo, DynamicSchemaManager(repo), config)
+    schema = DynamicSchemaManager(repo)
+    engine = SyncEngine(DataFetcher(config), repo, schema, config)
 
     # meta_asset_info 名称（全量写：含 em 待补的，/search 与 /indices 名称立即可用）
     names = asset_name_rows(cfg)
@@ -156,7 +202,10 @@ def main() -> None:
     t0 = time.time()
     for i, p in enumerate(fetchable, 1):
         try:
-            n = engine.run(p["source_key"], history_years=30, params_override=p["params"])
+            if p["source_key"] == "index.fred":
+                n = sync_fred_index(repo, schema, config, p["code"], p["params"]["series"])
+            else:
+                n = engine.run(p["source_key"], history_years=30, params_override=p["params"])
             if n is None:
                 fail += 1
                 failed_list.append(p["code"])

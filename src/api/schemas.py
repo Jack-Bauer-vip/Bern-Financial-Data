@@ -57,6 +57,9 @@ class HealthResponse(BaseModel):
     scheduler_running: bool = False
     stale_sources: list[dict] = []  # 滞后/停更的数据源（不含 deprecated）
     stale_count: int = 0
+    # 数据最新交易日（就绪标记 data_asof）——A/B 读前校验新鲜度用；
+    # 来自 data/sync_ready.json（更新完写），无标记时兜底取核心行情表最新日期。
+    data_asof: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

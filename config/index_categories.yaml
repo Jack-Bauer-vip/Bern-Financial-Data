@@ -99,6 +99,7 @@ manual:
   sh000970: {category: 策略, sub_category: ESG}       # ESG40
   sz399322: {category: 策略, sub_category: 治理}      # 国证治理
   sh000851: {category: 策略, sub_category: 多因子}    # 中证百度百发策略100指数
+  sz399677: {category: 策略, sub_category: 等权}      # 深A软件与互联网等权指数(等权优先于软件主题)
 
   # —— 行业 ——
   sz399986: {category: 行业, sub_category: 银行}      # 中证银行指数
@@ -121,6 +122,19 @@ manual:
   sh000832: {category: 债券, sub_category: 可转债}    # 中证转债
   sh000139: {category: 债券, sub_category: 可转债}    # 上证转债
   sz399307: {category: 债券, sub_category: 可转债}    # 深证转债
+
+  # —— 全收益/收益版（R/G/V 后缀）与特殊宽基 ——
+  sh000681: {category: 宽基}                # 科创价格(科创板价格指数)
+  sh000888: {category: 宽基}                # 上证收益(上证指数全收益)
+  sz399100: {category: 宽基}                # 新指数(深证新指数)
+  sz399002: {category: 宽基}                # 深成指R(深证成指全收益)
+  sz399004: {category: 宽基}                # 深证100R
+  sz399333: {category: 宽基}                # 中小100R
+  sz399344: {category: 宽基}                # 深证300R
+  sz399606: {category: 宽基}                # 创业板R
+  sz399611: {category: 宽基}                # 中创100R
+  sz399667: {category: 风格, sub_category: 成长}   # 创业板G(创业板成长)
+  sz399668: {category: 风格, sub_category: 价值}   # 创业板V(创业板价值)
 
   # —— 跨境（境内市场里的特殊宽基/海外，属 732 内部）——
   sh000054: {category: 跨境, sub_category: 海外}      # 上证海外

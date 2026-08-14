@@ -722,38 +722,34 @@ categories:
   - name: A股日线行情
     source_key: stock.a_daily
     health_check_ignore: true   # 需手动输入 symbol 按需拉取，表级新鲜度无意义，健康检查静默
-    api_source: akshare
-    api_function: stock_zh_a_hist
+    # 2026-08-13 迁移：本机 akshare/eastmoney 网络被阻断(stock_zh_a_hist 连不上)，
+    # 改用 tushare daily 按 ts_code 逐只拉取（与 fund.etf_daily 同机制）。git 历史
+    # 保留 akshare 定义，将来 eastmoney 可达可改回。复权仍走 ?adj= 因子表派生。
+    api_source: tushare
+    api_function: daily
     table_name: stock_daily
     # 复权因子归属：查询端 /data/stock_daily?adj=qfq|hfq 走此因子表派生
     adj_factor_asset_type: stock
     adj_factor_table: asset_adj_factor
     has_incremental: true
     incremental_field: date
-    # 统一中文列 → 规范英文列（与 CSV 导入的表头一致），并注入 symbol 列
+    date_format: '%Y%m%d'
+    # tushare daily 英文列 → 规范列（未映射的 ts_code/pre_close/change/pct_chg 自动丢弃）
     column_map:
-      日期: date
-      股票代码: symbol
-      开盘: open
-      收盘: close
-      最高: high
-      最低: low
-      成交量: volume
-      成交额: amount
+      trade_date: date
+      open: open
+      high: high
+      low: low
+      close: close
+      vol: volume
+      amount: amount
     code_column: symbol
     params_template:
-      symbol:
+      ts_code:
         type: text
         label: 股票代码
-        default: '000001'
-      period:
-        type: select
-        label: 周期
-        options:
-        - daily
-        - weekly
-        - monthly
-        default: daily
+        default: '600519.SH'
+        placeholder: 请输入股票代码，如 600519 或 600519.SH
       start_date:
         type: date
         label: 开始日期
@@ -762,17 +758,9 @@ categories:
         type: date
         label: 结束日期
         default: today
-      adjust:
-        type: select
-        label: 复权
-        options:
-        - ''
-        - qfq
-        - hfq
-        default: ''
 - name: 指数数据
   icon: trending_up
-  schedule_enabled: false
+  schedule_enabled: true
   children:
   - name: 指数日线
     source_key: index.daily
@@ -781,6 +769,10 @@ categories:
     table_name: index_daily
     has_incremental: true
     incremental_field: date
+    # 按交易日批量同步(tushare index_daily 全市场 + akshare 兜底)；
+    # sync_mode=index_daily_batch 让 sync.run("index.daily") 委托到 run_index_daily_batch
+    schedule_cron: 30 20 * * 1-5
+    sync_mode: index_daily_batch
     params_template:
       symbol:
         type: text
@@ -847,7 +839,7 @@ categories:
         default: today
 - name: 基金数据
   icon: account_balance
-  schedule_enabled: false
+  schedule_enabled: true
   children:
   - name: ETF基金日线
     source_key: fund.etf_daily
@@ -861,6 +853,10 @@ categories:
     data_warning: "2005-2017 含封闭式基金/LOF，按 ETF 口径统计时需过滤"
     has_incremental: true
     incremental_field: date
+    # 按交易日批量同步(tushare fund_daily 全市场)；sync_mode=fund_daily_batch
+    # 让 sync.run("fund.etf_daily") 委托到 run_fund_daily_batch
+    schedule_cron: 0 21 * * 1-5
+    sync_mode: fund_daily_batch
     # tushare fund_daily 返回 YYYYMMDD 日期，需按此格式传 start/end
     date_format: '%Y%m%d'
     # 统一列 → 规范英文列（保留 OHLC+amount+date+volume，丢弃 ts_code/pre_close/change/pct_chg）。

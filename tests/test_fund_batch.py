@@ -296,3 +296,37 @@ def test_run_fund_daily_batch_backfill_skips_recent_full_market(batch_env):
     total = engine.run_fund_daily_batch(
         start_date=date(2023, 6, 5), end_date=date.today())
     assert total == 2  # 只补 d_old
+
+
+# ---------------------------------------------------------------------------
+# sync.run("fund.etf_daily") 批量分发（第一刀: 行情纳入每日自动同步）
+#
+# data_catalog.yaml 给 fund.etf_daily 配了 sync_mode=fund_daily_batch，
+# 让 sync.run() 委托到 run_fund_daily_batch（而不是逐个默认 code 同步）。
+# 定时调度回调正是调 sync.run(source_key)，配置驱动即能全市场每日更新。
+# ---------------------------------------------------------------------------
+
+
+def test_sync_run_dispatches_fund_daily_batch(monkeypatch, batch_env):
+    """sync.run('fund.etf_daily') 按配置 sync_mode=fund_daily_batch 委托批量方法"""
+    engine, repo = batch_env(FakePro({}, {}))
+    calls = []
+
+    def _fake_batch(self, start_date=None, end_date=None):
+        calls.append((start_date, end_date))
+        return 42
+
+    monkeypatch.setattr(SyncEngine, "run_fund_daily_batch", _fake_batch)
+    result = engine.run("fund.etf_daily")
+    assert result == 42
+    assert calls  # 委托到批量方法（非逐个 code 同步）
+
+
+def test_sync_run_fund_config_has_batch_mode():
+    """回归: fund.etf_daily 配置携带 sync_mode=fund_daily_batch（驱动分发）"""
+    from src.core.fetcher_registry import FetcherRegistry
+    from src.utils.config import ConfigManager
+    cfg = FetcherRegistry(ConfigManager()).get_source("fund.etf_daily")
+    assert cfg is not None
+    assert cfg.get("sync_mode") == "fund_daily_batch"
+    assert cfg.get("schedule_cron")
